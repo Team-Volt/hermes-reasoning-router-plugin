@@ -1,0 +1,28 @@
+# Example plugin-local config for reasoning-router.
+# Install at: ~/.hermes/plugins/reasoning-router/config.yaml
+
+enabled: true
+
+# Fallback when no heuristic strongly matches.
+default: medium
+
+# Clamp all routing decisions into this range.
+min: low
+max: xhigh
+
+# Emit concise routing decisions into the Hermes gateway journal.
+log_decisions: true
+
+# Also write a persistent JSONL audit trail under ~/.hermes/logs/.
+decision_log: true
+decision_log_path: logs/reasoning-router.jsonl
+
+# Messages at or below this length can route low unless a stronger rule matches first.
+low_char_limit: 80
+
+# If a message hits this many high-complexity categories, route xhigh.
+xhigh_high_match_threshold: 4
+
+# Carry task complexity across short approvals like "yes" or "go ahead".
+pending_intent_enabled: true
+pending_intent_ttl_minutes: 30
