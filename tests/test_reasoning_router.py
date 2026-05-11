@@ -341,6 +341,34 @@ def test_pending_affirmation_inherits_prior_xhigh_intent():
     assert gateway.calls[-1] == (session_key, {"enabled": True, "effort": "low"})
 
 
+def test_next_step_approval_inherits_prior_xhigh_recommendation():
+    plugin = load_plugin()
+    gateway = FakeGateway({"reasoning_router": {"enabled": True}})
+    session_key = "discord:user-1:chat-1:thread-1"
+    store = FakeSessionStore(session_key, "session-1")
+
+    plugin.post_llm_call(
+        session_id="session-1",
+        user_message="Carefully review the LCM DB to deal with lifecycle fragmentation using xhigh reasoning.",
+        assistant_response=(
+            "Next step: phase 2 should be read-only classification of the remaining lifecycle rows, "
+            "split cron-owned Discord payload rows from orphan payload rows, and produce repair candidates."
+        ),
+        platform="discord",
+    )
+
+    result = plugin.pre_gateway_dispatch(
+        event("Go ahead and do the next step"), gateway=gateway, session_store=store
+    )
+
+    assert result == {"action": "allow"}
+    assert gateway.calls[-1] == (session_key, {"enabled": True, "effort": "xhigh"})
+    decision = gateway._reasoning_router_decisions[session_key]
+    assert decision["message_preview"] == "Go ahead and do the next step"
+    assert decision["pending_task_preview"]
+    assert "affirmed pending" in decision["reason"]
+
+
 def test_pending_rejection_clears_without_inheritance():
     plugin = load_plugin()
     gateway = FakeGateway({"reasoning_router": {"enabled": True}})
