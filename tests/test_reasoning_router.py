@@ -164,6 +164,41 @@ def test_short_technical_feasibility_followup_routes_medium():
     assert "technical feasibility" in reason
 
 
+def test_apply_tweak_approval_routes_high():
+    plugin = load_plugin()
+
+    effort, reason = plugin.classify_message(
+        "Yeah that’s what I meant. Go ahead and apply whatever tweak you recommend to prevent under routing again"
+    )
+
+    assert effort == "high"
+    assert "implementation approval" in reason
+
+
+def test_readme_wording_with_restart_terms_routes_medium():
+    plugin = load_plugin()
+
+    effort, reason = plugin.classify_message(
+        "The prompt in the readme is a bit overly descriptive, and keep in mind that not everyone uses Linux and systemctl. Some people are on macOS\n\n"
+        "I think you could be more generic and say something like ask the user to restart the gateway etc\n\n"
+        "Take a look at the Hermes-lcm readme and be more like that - standardized"
+    )
+
+    assert effort == "medium"
+    assert "documentation wording" in reason
+
+
+def test_security_docs_wording_can_still_route_xhigh():
+    plugin = load_plugin()
+
+    effort, reason = plugin.classify_message(
+        "Patch the README security wording for OAuth token handling and permission boundaries"
+    )
+
+    assert effort == "xhigh"
+    assert "xhigh" in reason
+
+
 def test_short_ordinary_question_still_routes_low():
     plugin = load_plugin()
 

@@ -53,6 +53,22 @@ _XHIGH_PATTERNS = (
     r"\b(multi[-\s]?system|cross[-\s]?system|multiple\s+systems|orchestrat(?:e|ion))\b",
 )
 
+_DOCS_POLISH_PATTERNS = (
+    r"\b(readme|docs?|documentation|install(?:ation)?\s+instructions?|prompt|copy[-\s]?paste\s+prompt|wording)\b",
+    r"\b(overly\s+descriptive|wording|generic|standard[is]ed|style|macos|linux|systemctl|restart\s+instructions?|ask\s+the\s+user\s+to\s+restart)\b",
+)
+
+_DOCS_POLISH_RISK_PATTERNS = (
+    r"\b(security|auth|oauth|credential|secret|permission|token|ssrf|injection)\b",
+    r"\b(production|deploy|deployment|rollback\s+safety|rollback-safe|data\s+loss|incident|outage)\b",
+    r"\b(multi[-\s]?system|cross[-\s]?system|multiple\s+systems|orchestrat(?:e|ion))\b",
+)
+
+_IMPLEMENTATION_APPROVAL_PATTERNS = (
+    r"\b(?:go\s+ahead|do\s+it|proceed|ship\s+it|make\s+it\s+so)\b.{0,120}\b(?:apply|patch|change|edit|tweak|fix|implement|configure)\b",
+    r"\bprevent\s+under[-\s]?routing\b",
+)
+
 _HIGH_PATTERN_GROUPS = {
     "implementation": (
         r"\b(implement|build|add|create|modify|change|edit|patch|refactor|flesh\s+out)\b",
@@ -106,6 +122,13 @@ _LOW_PATTERNS = (
 )
 
 _COMPILED_XHIGH = tuple(re.compile(pattern, re.I) for pattern in _XHIGH_PATTERNS)
+_COMPILED_DOCS_POLISH = tuple(re.compile(pattern, re.I) for pattern in _DOCS_POLISH_PATTERNS)
+_COMPILED_DOCS_POLISH_RISK = tuple(
+    re.compile(pattern, re.I) for pattern in _DOCS_POLISH_RISK_PATTERNS
+)
+_COMPILED_IMPLEMENTATION_APPROVAL = tuple(
+    re.compile(pattern, re.I) for pattern in _IMPLEMENTATION_APPROVAL_PATTERNS
+)
 _COMPILED_HIGH_GROUPS = {
     name: tuple(re.compile(pattern, re.I) for pattern in patterns)
     for name, patterns in _HIGH_PATTERN_GROUPS.items()
@@ -370,10 +393,19 @@ def classify_message(text: str, config: dict[str, Any] | None = None) -> tuple[s
     normalized = " ".join(text.strip().split())
     lowered = normalized.lower()
 
+    # Documentation/install-prompt wording can mention operational words like
+    # "restart the gateway" or "systemctl" without asking us to touch live ops.
+    # Keep that at medium unless other non-docs risk categories dominate.
+    if _is_docs_polish_request(lowered):
+        return _clamp_effort("medium", cfg), "documentation wording/install-prompt polish"
+
     # Strongest wins. Avoid low-routing a short sentence like "go ahead and set
     # up the automation" just because it is brief.
     if _matches(_COMPILED_XHIGH, lowered):
         return _clamp_effort("xhigh", cfg), "matched xhigh complexity/risk keywords"
+
+    if _matches(_COMPILED_IMPLEMENTATION_APPROVAL, lowered):
+        return _clamp_effort("high", cfg), "matched implementation approval/tweak request"
 
     high_groups = _matched_high_groups(lowered)
     threshold = _safe_int(cfg.get("xhigh_high_match_threshold"), DEFAULT_CONFIG["xhigh_high_match_threshold"])
@@ -537,6 +569,13 @@ def _preview(text: str, limit: int = 160) -> str:
 
 def _matches(patterns: Iterable[re.Pattern], text: str) -> bool:
     return any(pattern.search(text) for pattern in patterns)
+
+
+def _is_docs_polish_request(text: str) -> bool:
+    return all(pattern.search(text) for pattern in _COMPILED_DOCS_POLISH) and not _matches(
+        _COMPILED_DOCS_POLISH_RISK,
+        text,
+    )
 
 
 def _matched_high_groups(text: str) -> list[str]:
