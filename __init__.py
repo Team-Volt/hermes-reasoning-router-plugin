@@ -143,6 +143,7 @@ _AFFIRMATIVE_PATTERNS = tuple(
     for pattern in (
         r"^(?:y|yes|yep|yeah|ok|okay|sure|approved|affirmative)[.!?\s]*$",
         r"^(?:go ahead|do it|proceed|ship it|sounds good|that works|make it so|let'?s do it)[.!?\s]*$",
+        r"^(?:go ahead|do it|proceed|ship it|sounds good|that works|make it so|let'?s do it)\s+(?:and\s+)?(?:do|take|run|apply|execute|follow)?\s*(?:the\s+)?(?:next\s+step|recommendation|recommended\s+plan|plan)[.!?\s]*$",
         r"^(?:yes|yep|yeah|ok|okay|sure)[,\s]+(?:go ahead|do it|please|proceed|ship it|that works).*$",
     )
 )
@@ -159,6 +160,7 @@ _PROCEED_ACTION_PATTERNS = tuple(
         r"\b(?:want me to|would you like me to|should I|shall I|do you want me to)\b.{0,160}\b(?:proceed|build|implement|make|create|set\s*up|configure|install|apply|patch|change|edit|run|test|verify|restart|deploy|migrate|delete|remove|execute|start)\b",
         r"\b(?:say|reply|tell me)\s+(?:yes|go|proceed|approved).{0,160}\b(?:proceed|build|implement|start|apply|make|create|set\s*up|run|deploy)\b",
         r"\b(?:I can|I’ll|I'll|I will|next I can)\b.{0,160}\b(?:build|implement|patch|set\s*up|configure|install|apply|make the changes|run the tests|verify|restart|deploy|migrate|execute)\b.{0,80}\?",
+        r"\b(?:next\s+step|recommended\s+next\s+step|my\s+recommendation|recommended\s+sequence)\b.{0,220}\b(?:classif(?:y|ication)|split|repair|patch|implement|apply|run|verify|review|inspect|prune|rename|migrate|delete|create|build|set\s*up|configure|produce)\b",
     )
 )
 _RUNTIME_CONFIG_OVERRIDE: dict[str, Any] | None = None
