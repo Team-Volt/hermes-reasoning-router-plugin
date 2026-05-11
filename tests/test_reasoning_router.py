@@ -175,6 +175,17 @@ def test_apply_tweak_approval_routes_high():
     assert "implementation approval" in reason
 
 
+def test_careful_lcm_db_lifecycle_review_routes_high():
+    plugin = load_plugin()
+
+    effort, reason = plugin.classify_message(
+        "Carefully review the LCM DB to see how to deal with the lifecycle fragmentation"
+    )
+
+    assert effort == "high"
+    assert "diagnostic review" in reason
+
+
 def test_readme_wording_with_restart_terms_routes_medium():
     plugin = load_plugin()
 
