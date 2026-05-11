@@ -83,6 +83,10 @@ _HIGH_PATTERN_GROUPS = {
     "debug_forensics": (
         r"\b(debug|fix|troubleshoot|investigate|root\s*cause|forensic|why\s+did|failure)\b",
     ),
+    "diagnostic review": (
+        r"\b(?:carefully\s+)?(?:review|inspect)\b.{0,140}\b(?:lcm\s+db|lifecycle\s+fragmentation|lifecycle\s+rows|session\s+lifecycle|context\s+engine)\b",
+        r"\b(?:lcm\s+db|lifecycle\s+fragmentation|lifecycle\s+rows|session\s+lifecycle|context\s+engine)\b.{0,140}\b(?:review|inspect|diagnos(?:e|is|tic)|repair|deal\s+with)\b",
+    ),
     "hermes_internals": (
         r"\b(gateway|transport|provider|reasoning|request\s*parameter|session\s+override|pre_gateway_dispatch)\b",
     ),
