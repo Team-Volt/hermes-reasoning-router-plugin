@@ -1,5 +1,5 @@
 name: reasoning-router
-version: 0.3.0
+version: 0.3.1
 description: "Automatically chooses per-session Hermes reasoning effort from incoming Discord gateway messages and inherits pending task intent across terse approvals."
 author: "Hermes Reasoning Router contributors"
 provides_hooks:
