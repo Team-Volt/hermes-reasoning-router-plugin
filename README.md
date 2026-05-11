@@ -64,49 +64,26 @@ High-complexity categories are counted. If a message hits at least `xhigh_high_m
 └── README.md
 ```
 
+## Requirements
+
+- Hermes Agent with gateway plugins available
+- A Discord gateway/chat surface
+- Python 3.11+
+
 ## Install
 
-Clone the repository and copy the plugin into your Hermes plugins directory:
+Canonical install path: clone `reasoning-router` as a general user plugin.
 
 ```bash
-git clone https://github.com/Team-Volt/hermes-reasoning-router-plugin.git
-mkdir -p ~/.hermes/plugins/reasoning-router
-cp hermes-reasoning-router-plugin/__init__.py ~/.hermes/plugins/reasoning-router/__init__.py
-cp hermes-reasoning-router-plugin/plugin.yaml ~/.hermes/plugins/reasoning-router/plugin.yaml
-cp hermes-reasoning-router-plugin/examples/config.yaml ~/.hermes/plugins/reasoning-router/config.yaml
+git clone https://github.com/Team-Volt/hermes-reasoning-router-plugin \
+  ~/.hermes/plugins/reasoning-router
 ```
 
-Enable the plugin in `~/.hermes/config.yaml` if your Hermes setup requires explicit plugin enablement:
-
-```yaml
-plugins:
-  enabled:
-    - reasoning-router
-```
-
-Restart the Hermes gateway:
+For a profile-specific install:
 
 ```bash
-systemctl --user restart hermes-gateway.service
-```
-
-Verify that Hermes loaded the plugin:
-
-```bash
-python - <<'PY'
-from hermes_cli.plugins import PluginManager, get_plugin_command_handler
-
-m = PluginManager()
-m.discover_and_load()
-p = m._plugins.get("reasoning-router")
-print("enabled:", bool(p and p.enabled))
-print("error:", getattr(p, "error", None) if p else None)
-print("hooks:", getattr(p, "hooks_registered", None) if p else None)
-print("commands:", getattr(p, "commands_registered", None) if p else None)
-
-handler = get_plugin_command_handler("reasoning-router")
-print(handler("test Does this require modifying Hermes source?") if handler else "no command handler")
-PY
+git clone https://github.com/Team-Volt/hermes-reasoning-router-plugin \
+  ~/.hermes/profiles/myprofile/plugins/reasoning-router
 ```
 
 ## Configure
@@ -117,7 +94,16 @@ The plugin reads plugin-local config from:
 ~/.hermes/plugins/reasoning-router/config.yaml
 ```
 
-Start with `examples/config.yaml`:
+For profile-specific installs, use the matching profile plugin directory.
+
+Start from the example config:
+
+```bash
+cp ~/.hermes/plugins/reasoning-router/examples/config.yaml \
+  ~/.hermes/plugins/reasoning-router/config.yaml
+```
+
+Example config:
 
 ```yaml
 enabled: true
@@ -147,6 +133,39 @@ Config fields:
 | `xhigh_high_match_threshold` | Number of high-complexity categories needed to escalate to `xhigh` |
 | `pending_intent_enabled` | Enable effort inheritance for short approvals |
 | `pending_intent_ttl_minutes` | Expiration window for pending approval intent |
+
+## Activate
+
+Enable the plugin in `~/.hermes/config.yaml` if your Hermes setup requires explicit plugin enablement:
+
+```yaml
+plugins:
+  enabled:
+    - reasoning-router
+```
+
+Restart the Hermes gateway after installing or changing plugin config. Use the restart method for your environment; this may be a desktop app restart, process-manager restart, launchd service restart, systemd service restart, Docker/container restart, or asking the operator of the Hermes host to restart it.
+
+## Verify
+
+Verify that Hermes loaded the plugin:
+
+```bash
+python - <<'PY'
+from hermes_cli.plugins import PluginManager, get_plugin_command_handler
+
+m = PluginManager()
+m.discover_and_load()
+p = m._plugins.get("reasoning-router")
+print("enabled:", bool(p and p.enabled))
+print("error:", getattr(p, "error", None) if p else None)
+print("hooks:", getattr(p, "hooks_registered", None) if p else None)
+print("commands:", getattr(p, "commands_registered", None) if p else None)
+
+handler = get_plugin_command_handler("reasoning-router")
+print(handler("test Does this require modifying Hermes source?") if handler else "no command handler")
+PY
+```
 
 ## Slash command
 
@@ -182,11 +201,13 @@ When `log_decisions: true`, the Hermes gateway journal includes entries like:
 reasoning-router: session=<session_key> effort=<level> reason=<why>
 ```
 
-View them with:
+Gateway log access depends on how Hermes is running. On systemd-based Linux hosts, for example:
 
 ```bash
 journalctl --user -u hermes-gateway.service | grep reasoning-router
 ```
+
+On macOS or other setups, use the log path or process manager for your Hermes gateway.
 
 When `decision_log: true`, the plugin writes JSONL rows to:
 
@@ -205,27 +226,23 @@ python -m py_compile __init__.py
 python -m pytest -q tests -o 'addopts='
 ```
 
-## Copy-paste LLM install prompt
+## LLM install prompt
 
-Give this prompt to an LLM that has shell access to your Hermes host:
+Give this to an agent with access to your Hermes install:
 
 ```text
-Install and configure the Hermes `reasoning-router` plugin from https://github.com/Team-Volt/hermes-reasoning-router-plugin.
+Install the Hermes reasoning-router plugin from https://github.com/Team-Volt/hermes-reasoning-router-plugin.
 
-Requirements:
-- This plugin currently supports Discord only; do not claim it supports cron jobs, Telegram, Slack, CLI, or other chat surfaces unless the code has changed.
+Use the README as the source of truth. Install it as a Hermes user plugin, copy the example config, enable the plugin if this Hermes setup requires explicit plugin enablement, and verify that it loads.
+
+Important constraints:
+- It currently supports Discord only.
 - Do not edit Hermes source code.
-- Install the plugin under ~/.hermes/plugins/reasoning-router/.
-- Copy __init__.py and plugin.yaml from the repo.
-- Copy examples/config.yaml to ~/.hermes/plugins/reasoning-router/config.yaml.
-- If ~/.hermes/config.yaml uses explicit plugin enablement, ensure `reasoning-router` is listed under `plugins.enabled` without removing existing enabled plugins.
-- Run `python -m py_compile ~/.hermes/plugins/reasoning-router/__init__.py`.
-- If pytest is available, run the plugin tests from the cloned repo with `python -m pytest -q tests -o 'addopts='`.
-- Restart the Hermes gateway with `systemctl --user restart hermes-gateway.service`.
-- Verify the gateway is active with `systemctl --user status hermes-gateway.service --no-pager`.
-- Verify plugin discovery with `PluginManager().discover_and_load()` and confirm the plugin is enabled, has no error, registers `pre_gateway_dispatch` and `post_llm_call`, and exposes the `reasoning-router` command.
-- Run the command handler locally for `test Does this require modifying Hermes source?` and confirm it routes to at least `medium`.
-- Report exactly what changed and include any verification output. If any step fails, stop and explain the failure instead of guessing.
+- Preserve existing Hermes config and enabled plugins.
+- Use profile-specific paths if this install uses a Hermes profile.
+- Restart the Hermes gateway using the normal method for this machine, or ask me to restart it if you are not sure.
+- After restart, verify plugin discovery and run a routing smoke test with the reasoning-router command or command handler.
+- If any step fails, stop and explain the failure instead of guessing.
 ```
 
 ## Notes and limitations
