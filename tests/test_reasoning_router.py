@@ -14,7 +14,7 @@ PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 
 @pytest.fixture(autouse=True)
 def isolated_hermes_home(tmp_path, monkeypatch):
-    """Keep tests from reading the live ~/.hermes plugin-local config."""
+    """Keep tests from reading the live ~/.hermes reasoning-router config."""
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
 
 
@@ -197,6 +197,39 @@ def test_apply_tweak_approval_routes_high():
     assert "implementation approval" in reason
 
 
+def test_go_ahead_fork_and_start_working_routes_high():
+    plugin = load_plugin()
+
+    effort, reason = plugin.classify_message(
+        "Go ahead and fork the repo and start working on it"
+    )
+
+    assert effort == "high"
+    assert "approval" in reason
+
+
+def test_delete_fork_and_update_ha_rollout_routes_xhigh():
+    plugin = load_plugin()
+
+    effort, reason = plugin.classify_message(
+        "You can delete the personal fork. You can also go ahead and update HA to use the new fork and we can see how it works out"
+    )
+
+    assert effort == "xhigh"
+    assert "xhigh" in reason or "rollout" in reason
+
+
+def test_merge_fork_and_update_ha_from_main_routes_xhigh():
+    plugin = load_plugin()
+
+    effort, reason = plugin.classify_message(
+        "If you're happy with it and it works, you can make PR's and merge them into our fork, and then update HA to properly use the fork and not a branch"
+    )
+
+    assert effort == "xhigh"
+    assert "xhigh" in reason or "rollout" in reason
+
+
 def test_careful_lcm_db_lifecycle_review_routes_high():
     plugin = load_plugin()
 
@@ -215,6 +248,17 @@ def test_readme_wording_with_restart_terms_routes_medium():
         "The prompt in the readme is a bit overly descriptive, and keep in mind that not everyone uses Linux and systemctl. Some people are on macOS\n\n"
         "I think you could be more generic and say something like ask the user to restart the gateway etc\n\n"
         "Take a look at the Hermes-lcm readme and be more like that - standardized"
+    )
+
+    assert effort == "medium"
+    assert "documentation wording" in reason
+
+
+def test_ha_fork_docs_wording_routes_medium_not_xhigh():
+    plugin = load_plugin()
+
+    effort, reason = plugin.classify_message(
+        "Update the HA docs to mention the new fork"
     )
 
     assert effort == "medium"
@@ -253,16 +297,16 @@ def test_disabled_router_does_nothing():
 def test_reasoning_router_command_status_reports_state(tmp_path, monkeypatch):
     plugin = load_plugin()
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-    (tmp_path / "config.yaml").write_text(
+    config_path = tmp_path / "reasoning-router" / "config.yaml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
         yaml.safe_dump(
             {
-                "reasoning_router": {
-                    "enabled": True,
-                    "min": "low",
-                    "default": "medium",
-                    "max": "high",
-                    "log_decisions": True,
-                }
+                "enabled": True,
+                "min": "low",
+                "default": "medium",
+                "max": "high",
+                "log_decisions": True,
             }
         )
     )
@@ -286,18 +330,68 @@ def test_reasoning_router_command_status_defaults_to_xhigh(tmp_path, monkeypatch
     assert "decision_log=" in output
 
 
+def test_config_path_is_outside_plugin_directory(tmp_path, monkeypatch):
+    plugin = load_plugin()
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    assert plugin._config_path() == tmp_path / "reasoning-router" / "config.yaml"
+    assert plugin._config_path() != tmp_path / "plugins" / "reasoning-router" / "config.yaml"
+
+
+def test_standalone_config_wins_over_legacy_plugin_config(tmp_path, monkeypatch):
+    plugin = load_plugin()
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    standalone = tmp_path / "reasoning-router" / "config.yaml"
+    legacy = tmp_path / "plugins" / "reasoning-router" / "config.yaml"
+    standalone.parent.mkdir(parents=True)
+    legacy.parent.mkdir(parents=True)
+    standalone.write_text(yaml.safe_dump({"max": "xhigh", "decision_log": True}))
+    legacy.write_text(yaml.safe_dump({"max": "medium", "decision_log": False}))
+
+    cfg = plugin._read_router_config_from_disk()
+
+    assert cfg["max"] == "xhigh"
+    assert cfg["decision_log"] is True
+
+
+def test_legacy_plugin_config_is_fallback_when_standalone_missing(tmp_path, monkeypatch):
+    plugin = load_plugin()
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    legacy = tmp_path / "plugins" / "reasoning-router" / "config.yaml"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text(yaml.safe_dump({"max": "medium", "decision_log": True}))
+
+    cfg = plugin._read_router_config_from_disk()
+
+    assert cfg["max"] == "medium"
+    assert cfg["decision_log"] is True
+
+
+def test_main_config_is_fallback_after_standalone_and_legacy_missing(tmp_path, monkeypatch):
+    plugin = load_plugin()
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    (tmp_path / "config.yaml").write_text(
+        yaml.safe_dump({"reasoning_router": {"max": "high", "decision_log": True}})
+    )
+
+    cfg = plugin._read_router_config_from_disk()
+
+    assert cfg["max"] == "high"
+    assert cfg["decision_log"] is True
+
+
 def test_reasoning_router_command_toggles_config(tmp_path, monkeypatch):
     plugin = load_plugin()
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     (tmp_path / "config.yaml").write_text(yaml.safe_dump({"plugins": {"enabled": ["reasoning-router"]}}))
 
     off_output = plugin.reasoning_router_command("off")
-    plugin_cfg = yaml.safe_load((tmp_path / "plugins" / "reasoning-router" / "config.yaml").read_text())
+    plugin_cfg = yaml.safe_load((tmp_path / "reasoning-router" / "config.yaml").read_text())
     assert off_output == "Reasoning router disabled. Use `/reasoning-router on` to re-enable."
     assert plugin_cfg["enabled"] is False
 
     on_output = plugin.reasoning_router_command("on")
-    plugin_cfg = yaml.safe_load((tmp_path / "plugins" / "reasoning-router" / "config.yaml").read_text())
+    plugin_cfg = yaml.safe_load((tmp_path / "reasoning-router" / "config.yaml").read_text())
     assert on_output == "Reasoning router enabled."
     assert plugin_cfg["enabled"] is True
 
@@ -310,7 +404,7 @@ def test_reasoning_router_command_updates_max_and_test_classifies(tmp_path, monk
     )
 
     max_output = plugin.reasoning_router_command("max medium")
-    plugin_cfg = yaml.safe_load((tmp_path / "plugins" / "reasoning-router" / "config.yaml").read_text())
+    plugin_cfg = yaml.safe_load((tmp_path / "reasoning-router" / "config.yaml").read_text())
     assert max_output == "Reasoning router max effort set to medium."
     assert plugin_cfg["max"] == "medium"
 
@@ -496,7 +590,7 @@ def test_reasoning_router_command_threshold_and_recent(tmp_path, monkeypatch):
     )
 
     threshold_output = plugin.reasoning_router_command("threshold 2")
-    plugin_cfg = yaml.safe_load((tmp_path / "plugins" / "reasoning-router" / "config.yaml").read_text())
+    plugin_cfg = yaml.safe_load((tmp_path / "reasoning-router" / "config.yaml").read_text())
     assert threshold_output == "Reasoning router xhigh threshold set to 2 high-complexity categories."
     assert plugin_cfg["xhigh_high_match_threshold"] == 2
 
