@@ -59,7 +59,7 @@ High-complexity categories are counted. If a message hits at least `xhigh_high_m
 .
 ├── __init__.py                     # plugin implementation
 ├── plugin.yaml                     # Hermes plugin metadata
-├── examples/config.yaml            # example plugin-local config
+├── examples/config.yaml            # example standalone config
 ├── tests/test_reasoning_router.py  # focused regression tests
 └── README.md
 ```
@@ -88,20 +88,23 @@ git clone https://github.com/Team-Volt/hermes-reasoning-router-plugin \
 
 ## Configure
 
-The plugin reads plugin-local config from:
+The plugin reads standalone config from:
 
 ```text
-~/.hermes/plugins/reasoning-router/config.yaml
+~/.hermes/reasoning-router/config.yaml
 ```
 
-For profile-specific installs, use the matching profile plugin directory.
+For profile-specific installs, use the matching profile home, for example `~/.hermes/profiles/myprofile/reasoning-router/config.yaml`.
 
 Start from the example config:
 
 ```bash
+mkdir -p ~/.hermes/reasoning-router
 cp ~/.hermes/plugins/reasoning-router/examples/config.yaml \
-  ~/.hermes/plugins/reasoning-router/config.yaml
+  ~/.hermes/reasoning-router/config.yaml
 ```
+
+Legacy installs with `~/.hermes/plugins/reasoning-router/config.yaml` still read that file if the standalone config is missing, but slash-command writes now go to the standalone path.
 
 Example config:
 

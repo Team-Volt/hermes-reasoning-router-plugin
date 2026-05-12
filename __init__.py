@@ -51,13 +51,16 @@ _XHIGH_PATTERNS = (
     r"\b(production|rollback\s+safety|rollback-safe|data\s+loss|incident|outage)\b",
     r"\b(restart\s+the\s+gateway|gateway\s+restart|restart\s+hermes|systemd\s+restart)\b",
     r"\b(multi[-\s]?system|cross[-\s]?system|multiple\s+systems|orchestrat(?:e|ion))\b",
+    r"\b(?:delete|remove|purge)\b.{0,160}\bfork\b.{0,220}\b(?:update|switch|migrate|roll\s*out|rollout)\b.{0,120}\b(?:ha|home\s*assistant|hacs)\b",
+    r"\b(?:make\s+pr'?s?|open\s+pr'?s?|merge)\b.{0,160}\bfork\b.{0,220}\b(?:update|switch|migrate)\b.{0,120}\b(?:ha|home\s*assistant|hacs)\b",
+    r"\b(?:update|switch|migrate)\b.{0,80}\b(?:ha|home\s*assistant|hacs)\b.{0,160}\b(?:new\s+)?fork\b",
     r"\b(?:copy|sync|migrate|import|backfill|mirror)\b.{0,180}\b(?:gbrain|hindsight)\b.{0,180}\b(?:gbrain|hindsight)\b",
     r"\b(?:gbrain|hindsight)\b.{0,180}\b(?:copy|sync|migrate|import|backfill|mirror)\b.{0,180}\b(?:gbrain|hindsight)\b",
 )
 
 _DOCS_POLISH_PATTERNS = (
     r"\b(readme|docs?|documentation|install(?:ation)?\s+instructions?|prompt|copy[-\s]?paste\s+prompt|wording)\b",
-    r"\b(overly\s+descriptive|wording|generic|standard[is]ed|style|macos|linux|systemctl|restart\s+instructions?|ask\s+the\s+user\s+to\s+restart)\b",
+    r"\b(overly\s+descriptive|wording|generic|standard[is]ed|style|mention|document|macos|linux|systemctl|restart\s+instructions?|ask\s+the\s+user\s+to\s+restart)\b",
 )
 
 _DOCS_POLISH_RISK_PATTERNS = (
@@ -68,6 +71,7 @@ _DOCS_POLISH_RISK_PATTERNS = (
 
 _IMPLEMENTATION_APPROVAL_PATTERNS = (
     r"\b(?:go\s+ahead|do\s+it|proceed|ship\s+it|make\s+it\s+so)\b.{0,120}\b(?:apply|patch|change|edit|tweak|fix|implement|configure)\b",
+    r"\b(?:go\s+ahead|do\s+it|proceed|ship\s+it|make\s+it\s+so)\b.{0,120}\b(?:fork|start\s+working|work\s+on|update\s+(?:ha|home\s*assistant|hacs)?\s*to\s+use)\b",
     r"\bprevent\s+under[-\s]?routing\b",
 )
 
@@ -323,7 +327,7 @@ def reasoning_router_command(raw_args: str = "") -> str:
     """Discord/CLI slash command for the router.
 
     Registered as `/reasoning-router`. Config changes are written to
-    `~/.hermes/config.yaml` and mirrored into this module's runtime override so
+    `~/.hermes/reasoning-router/config.yaml` and mirrored into this module's runtime override so
     they affect the next gateway message without waiting for a restart.
     """
     args = (raw_args or "").strip()
@@ -601,13 +605,14 @@ def _matched_high_groups(text: str) -> list[str]:
 
 
 def _router_config(gateway) -> dict[str, Any]:
-    # Prefer plugin-local config. Gateway config fallback keeps old sessions safe
-    # during migration, but writes now go to the plugin file only.
+    # Prefer the standalone router config outside the plugin source tree.
+    # Legacy plugin-local/main-config fallbacks keep old installs safe during
+    # migration, but writes now go to ~/.hermes/reasoning-router/config.yaml.
     merged = _read_router_config_from_disk()
     config = getattr(gateway, "config_data", None)
     if isinstance(config, dict):
         legacy_router = config.get("reasoning_router")
-        if isinstance(legacy_router, dict) and not _plugin_config_path().exists():
+        if isinstance(legacy_router, dict) and not _config_path().exists() and not _legacy_plugin_config_path().exists():
             merged.update(legacy_router)
     if isinstance(_RUNTIME_CONFIG_OVERRIDE, dict):
         merged.update(_RUNTIME_CONFIG_OVERRIDE)
@@ -626,10 +631,14 @@ def _main_config_path() -> Path:
 
 
 def _config_path() -> Path:
-    return _plugin_config_path()
+    return _hermes_home() / "reasoning-router" / "config.yaml"
 
 
 def _plugin_config_path() -> Path:
+    return _config_path()
+
+
+def _legacy_plugin_config_path() -> Path:
     return _main_config_path().parent / "plugins" / "reasoning-router" / "config.yaml"
 
 
@@ -649,7 +658,7 @@ def _read_yaml_file(path: Path) -> dict[str, Any]:
 
 
 def _read_full_config() -> dict[str, Any]:
-    return _read_yaml_file(_plugin_config_path())
+    return _read_yaml_file(_config_path())
 
 
 def _read_legacy_router_config() -> dict[str, Any]:
@@ -659,10 +668,12 @@ def _read_legacy_router_config() -> dict[str, Any]:
 
 
 def _read_router_config_from_disk() -> dict[str, Any]:
-    plugin_path = _plugin_config_path()
+    config_path = _config_path()
     router = _read_full_config()
-    if not plugin_path.exists():
-        legacy = _read_legacy_router_config()
+    if not config_path.exists():
+        legacy = _read_yaml_file(_legacy_plugin_config_path())
+        if not legacy:
+            legacy = _read_legacy_router_config()
         if legacy:
             router = legacy
     cfg = {**DEFAULT_CONFIG, **router}
@@ -676,7 +687,7 @@ def _update_router_config(updates: dict[str, Any]) -> None:
     if yaml is None:
         raise RuntimeError("PyYAML is required to update reasoning-router config")
 
-    path = _plugin_config_path()
+    path = _config_path()
     data = _read_router_config_from_disk()
     data.update(updates)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -691,7 +702,7 @@ def _format_status(config: dict[str, Any]) -> str:
     pending_state = "on" if _truthy(config.get("pending_intent_enabled", True)) else "off"
     return (
         f"Reasoning router: {state}\n"
-        f"config={_plugin_config_path()}\n"
+        f"config={_config_path()}\n"
         f"min={config.get('min')} default={config.get('default')} max={config.get('max')}\n"
         f"journal_log={bool(_truthy(config.get('log_decisions', True)))} "
         f"decision_log={bool(_truthy(config.get('decision_log', False)))}\n"
