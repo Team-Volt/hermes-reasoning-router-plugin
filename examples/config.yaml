@@ -1,5 +1,5 @@
-# Example plugin-local config for reasoning-router.
-# Install at: ~/.hermes/plugins/reasoning-router/config.yaml
+# Example standalone config for reasoning-router.
+# Install at: ~/.hermes/reasoning-router/config.yaml
 
 enabled: true
 
