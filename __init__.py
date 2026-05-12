@@ -51,6 +51,8 @@ _XHIGH_PATTERNS = (
     r"\b(production|rollback\s+safety|rollback-safe|data\s+loss|incident|outage)\b",
     r"\b(restart\s+the\s+gateway|gateway\s+restart|restart\s+hermes|systemd\s+restart)\b",
     r"\b(multi[-\s]?system|cross[-\s]?system|multiple\s+systems|orchestrat(?:e|ion))\b",
+    r"\b(?:copy|sync|migrate|import|backfill|mirror)\b.{0,180}\b(?:gbrain|hindsight)\b.{0,180}\b(?:gbrain|hindsight)\b",
+    r"\b(?:gbrain|hindsight)\b.{0,180}\b(?:copy|sync|migrate|import|backfill|mirror)\b.{0,180}\b(?:gbrain|hindsight)\b",
 )
 
 _DOCS_POLISH_PATTERNS = (
@@ -119,6 +121,10 @@ _MEDIUM_TECH_FOLLOWUP_PATTERNS = (
     r"\b(?:clean\s+way|right\s+way|best\s+way)\b.{0,80}\b(?:source|code|config|configuration|plugin|hook|cron|scheduler|gateway|hermes|automation)\b",
 )
 
+_MEDIUM_OPINION_PATTERNS = (
+    r"\b(?:honest\s+opinion|your\s+opinion|what\s+do\s+you\s+think|your\s+take|thoughts\s+on|is\s+there\s+(?:actually\s+)?value\s+in)\b",
+)
+
 _LOW_PATTERNS = (
     r"^(thanks|thank you|ok|okay|yes|no|yep|nope|cool|nice)[.!?\s]*$",
     r"\b(what\s+time|what\s+date|who\s+is|what\s+is)\b",
@@ -140,6 +146,9 @@ _COMPILED_HIGH_GROUPS = {
 _COMPILED_MEDIUM = tuple(re.compile(pattern, re.I) for pattern in _MEDIUM_PATTERNS)
 _COMPILED_MEDIUM_TECH_FOLLOWUP = tuple(
     re.compile(pattern, re.I) for pattern in _MEDIUM_TECH_FOLLOWUP_PATTERNS
+)
+_COMPILED_MEDIUM_OPINION = tuple(
+    re.compile(pattern, re.I) for pattern in _MEDIUM_OPINION_PATTERNS
 )
 _COMPILED_LOW = tuple(re.compile(pattern, re.I) for pattern in _LOW_PATTERNS)
 _AFFIRMATIVE_PATTERNS = tuple(
@@ -429,6 +438,9 @@ def classify_message(text: str, config: dict[str, Any] | None = None) -> tuple[s
 
     if _matches(_COMPILED_MEDIUM_TECH_FOLLOWUP, lowered):
         return _clamp_effort("medium", cfg), "matched technical feasibility/design follow-up"
+
+    if _matches(_COMPILED_MEDIUM_OPINION, lowered):
+        return _clamp_effort("medium", cfg), "matched opinion/take request"
 
     if _matches(_COMPILED_LOW, lowered) or len(normalized) <= _safe_int(cfg.get("low_char_limit"), 80):
         return _clamp_effort("low", cfg), "quick/simple message"

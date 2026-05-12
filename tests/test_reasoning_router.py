@@ -164,6 +164,28 @@ def test_short_technical_feasibility_followup_routes_medium():
     assert "technical feasibility" in reason
 
 
+def test_honest_opinion_request_routes_medium_not_high_or_low():
+    plugin = load_plugin()
+
+    effort, reason = plugin.classify_message(
+        "I want your honest opinion on gbrain. Is there actually value there?"
+    )
+
+    assert effort == "medium"
+    assert "opinion" in reason
+
+
+def test_memory_system_content_migration_routes_xhigh():
+    plugin = load_plugin()
+
+    effort, reason = plugin.classify_message(
+        "Copy the contents of gbrain in to hindsight if we don’t already have the fact/info in hindsight"
+    )
+
+    assert effort == "xhigh"
+    assert "xhigh" in reason or "memory" in reason
+
+
 def test_apply_tweak_approval_routes_high():
     plugin = load_plugin()
 
