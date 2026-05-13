@@ -435,6 +435,106 @@ def test_semantic_classifier_does_not_lower_or_call_for_obvious_xhigh(monkeypatc
     assert "xhigh" in reason
 
 
+def test_semantic_classifier_can_lower_question_false_positive(monkeypatch):
+    plugin = load_plugin()
+    calls = []
+
+    def fake_semantic_classifier(text, config):
+        calls.append((text, config))
+        return {
+            "effort": "medium",
+            "confidence": 0.93,
+            "risk_categories": ["service_restart_question"],
+            "reason": "asking whether restart is needed, not requesting restart",
+        }
+
+    monkeypatch.setattr(plugin, "_semantic_classify_with_codex_proxy", fake_semantic_classifier)
+
+    effort, reason = plugin.classify_message(
+        "Do you need me to restart the gateway?",
+        {"semantic_classifier_enabled": True, "semantic_classifier_min_confidence": 0.75},
+    )
+
+    assert len(calls) == 1
+    assert effort == "medium"
+    assert "lowered" in reason
+    assert "service_restart_question" in reason
+
+
+def test_semantic_classifier_does_not_lower_action_request(monkeypatch):
+    plugin = load_plugin()
+    calls = []
+
+    def fake_semantic_classifier(text, config):
+        calls.append((text, config))
+        return {"effort": "medium", "confidence": 0.99, "reason": "too low"}
+
+    monkeypatch.setattr(plugin, "_semantic_classify_with_codex_proxy", fake_semantic_classifier)
+
+    effort, reason = plugin.classify_message(
+        "Please restart the gateway",
+        {"semantic_classifier_enabled": True},
+    )
+
+    assert calls == []
+    assert effort == "xhigh"
+    assert "xhigh" in reason
+
+
+def test_semantic_classifier_messages_include_compact_recent_context():
+    plugin = load_plugin()
+
+    messages = plugin._semantic_classifier_messages(
+        "Go ahead and set up the automation",
+        {
+            "last_assistant_intent": "Asked whether to create cron automation",
+            "recent_messages": [
+                {"role": "tool", "content": "secret tool output should be ignored"},
+                {"role": "user", "content": "Can old sessions be pruned automatically?"},
+                {"role": "assistant", "content": "We can create a cron job."},
+                {"role": "user", "content": "Go ahead"},
+                {"role": "assistant", "content": "I will create the cron job."},
+            ],
+            "pending_action": "create_cron_job",
+        },
+    )
+    payload = json.loads(messages[1]["content"])
+
+    assert payload["current_user_message"] == "Go ahead and set up the automation"
+    assert payload["last_assistant_intent"] == "Asked whether to create cron automation"
+    assert payload["pending_action"] == "create_cron_job"
+    assert [item["role"] for item in payload["recent_messages"]] == ["assistant", "user", "assistant"]
+    assert "tool output" not in messages[1]["content"]
+
+
+def test_semantic_classifier_today_snippet_expectations(monkeypatch):
+    plugin = load_plugin()
+
+    fake_outputs = {
+        "Do you need me to restart the gateway?": {"effort": "medium", "confidence": 0.93, "risk_categories": ["service_restart_question"], "reason": "question only"},
+        "So you're saying we feed all prompts through something like gpt-5.4-mini first, to determine what reasoning level the task should actually complete as?": {"effort": "medium", "confidence": 0.92, "risk_categories": ["design_clarification"], "reason": "clarification"},
+    }
+
+    def fake_semantic_classifier(text, config):
+        return fake_outputs[text]
+
+    monkeypatch.setattr(plugin, "_semantic_classify_with_codex_proxy", fake_semantic_classifier)
+
+    cases = [
+        ("Do you need me to restart the gateway?", "medium"),
+        ("So you're saying we feed all prompts through something like gpt-5.4-mini first, to determine what reasoning level the task should actually complete as?", "medium"),
+        ("You should make a PR and merge it", "high"),
+        ("I think at this point we can shut down the gbrain mcp", "xhigh"),
+    ]
+
+    for text, expected in cases:
+        effort, _reason = plugin.classify_message(
+            text,
+            {"semantic_classifier_enabled": True, "semantic_classifier_min_confidence": 0.75},
+        )
+        assert effort == expected
+
+
 def test_semantic_classifier_prompt_is_minimal_and_json_only():
     plugin = load_plugin()
 

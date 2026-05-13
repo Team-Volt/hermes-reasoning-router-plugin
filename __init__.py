@@ -439,8 +439,21 @@ def classify_message(text: str, config: dict[str, Any] | None = None) -> tuple[s
         return _clamp_effort("medium", cfg), "documentation wording/install-prompt polish"
 
     # Strongest wins. Avoid low-routing a short sentence like "go ahead and set
-    # up the automation" just because it is brief.
+    # up the automation" just because it is brief. Question/clarification forms
+    # get one semantic pass so words like "restart gateway" do not over-route
+    # when the user is only asking whether a restart is needed.
     if _matches(_COMPILED_XHIGH, lowered):
+        if _is_question_or_clarification(lowered):
+            semantic_route = _semantic_route_for_ambiguous_message(
+                text,
+                lowered,
+                cfg,
+                baseline_effort="xhigh",
+                baseline_reason="matched xhigh complexity/risk keywords",
+                allow_lowering=True,
+            )
+            if semantic_route is not None:
+                return semantic_route
         return _clamp_effort("xhigh", cfg), "matched xhigh complexity/risk keywords"
 
     if _matches(_COMPILED_IMPLEMENTATION_APPROVAL, lowered):
@@ -449,15 +462,39 @@ def classify_message(text: str, config: dict[str, Any] | None = None) -> tuple[s
     high_groups = _matched_high_groups(lowered)
     threshold = _safe_int(cfg.get("xhigh_high_match_threshold"), DEFAULT_CONFIG["xhigh_high_match_threshold"])
     if len(high_groups) >= threshold:
+        baseline_reason = f"matched multiple high-complexity categories: {', '.join(high_groups)}"
+        if _is_question_or_clarification(lowered):
+            semantic_route = _semantic_route_for_ambiguous_message(
+                text,
+                lowered,
+                cfg,
+                baseline_effort="xhigh",
+                baseline_reason=baseline_reason,
+                allow_lowering=True,
+            )
+            if semantic_route is not None:
+                return semantic_route
         return (
             _clamp_effort("xhigh", cfg),
-            f"matched multiple high-complexity categories: {', '.join(high_groups)}",
+            baseline_reason,
         )
 
     if high_groups:
+        baseline_reason = f"matched high-complexity category: {', '.join(high_groups)}"
+        if _is_question_or_clarification(lowered):
+            semantic_route = _semantic_route_for_ambiguous_message(
+                text,
+                lowered,
+                cfg,
+                baseline_effort="high",
+                baseline_reason=baseline_reason,
+                allow_lowering=True,
+            )
+            if semantic_route is not None:
+                return semantic_route
         return (
             _clamp_effort("high", cfg),
-            f"matched high-complexity category: {', '.join(high_groups)}",
+            baseline_reason,
         )
 
     if _matches(_COMPILED_MEDIUM_TECH_FOLLOWUP, lowered):
@@ -489,12 +526,16 @@ def _semantic_route_for_ambiguous_message(
     text: str,
     lowered: str,
     config: dict[str, Any],
+    *,
+    baseline_effort: str = "low",
+    baseline_reason: str = "quick/simple message",
+    allow_lowering: bool = False,
 ) -> tuple[str, str] | None:
-    """Optionally raise an ambiguous deterministic route with an isolated classifier.
+    """Optionally adjust an ambiguous deterministic route with an isolated classifier.
 
     The POC is deliberately conservative: it is disabled by default, skips
-    obvious low messages, never runs after deterministic high/xhigh matches, and
-    only accepts high-confidence results that raise the baseline low route.
+    obvious low chatter, raises low/default routes, and lowers high/xhigh only
+    for question/clarification forms that look like deterministic false positives.
     """
     if not _truthy(config.get("semantic_classifier_enabled", False)):
         return None
@@ -535,10 +576,10 @@ def _semantic_route_for_ambiguous_message(
     if confidence < min_confidence:
         return None
 
-    baseline = _clamp_effort("low", config)
+    baseline = _clamp_effort(baseline_effort, config)
     routed = _clamp_effort(effort, config)
-    if EFFORT_ORDER.index(routed) <= EFFORT_ORDER.index(baseline):
-        return None
+    baseline_idx = EFFORT_ORDER.index(baseline)
+    routed_idx = EFFORT_ORDER.index(routed)
 
     categories = parsed.get("risk_categories") or []
     if isinstance(categories, str):
@@ -547,7 +588,12 @@ def _semantic_route_for_ambiguous_message(
     reason = str(parsed.get("reason") or "semantic classification").strip()
     if category_text:
         reason = f"{reason}; categories: {category_text}"
-    return routed, f"semantic classifier raised ambiguous route to {routed}: {reason}"
+
+    if routed_idx > baseline_idx:
+        return routed, f"semantic classifier raised ambiguous route to {routed}: {reason}"
+    if allow_lowering and routed_idx < baseline_idx and routed_idx >= EFFORT_ORDER.index("medium"):
+        return routed, f"semantic classifier lowered question/clarification route from {baseline}: {reason}"
+    return None
 
 
 def _normalize_semantic_classifier_result(result: Any) -> dict[str, Any] | None:
@@ -600,13 +646,15 @@ def _semantic_classifier_messages(
 ) -> list[dict[str, str]]:
     ctx = context if isinstance(context, dict) else {}
     payload = {
-        "message": str(text or "")[:1200],
+        "current_user_message": str(text or "")[:1200],
         "last_assistant_intent": str(ctx.get("last_assistant_intent") or "")[:500],
+        "pending_action": str(ctx.get("pending_action") or "")[:120],
+        "recent_messages": _compact_recent_messages(ctx.get("recent_messages")),
     }
     system = (
         "You are a routing classifier. Return JSON only. "
         "Classify the user request into exactly one effort: low, medium, high, xhigh. "
-        "Use last_assistant_intent when the message is terse or ambiguous. "
+        "Use last_assistant_intent and recent_messages only to resolve terse approvals, deictic references, and pending action scope. "
         "Treat terse deictic imperatives that ask to set, change, apply, use, or do this/that/it as medium unless they are clearly casual chatter. "
         "low: trivial thanks/status/simple factual reply. "
         "medium: explanation, research, inspection, simple reversible action, or one setting value change. "
@@ -619,6 +667,39 @@ def _semantic_classifier_messages(
         {"role": "system", "content": system},
         {"role": "user", "content": json.dumps(payload, ensure_ascii=False, sort_keys=True)},
     ]
+
+
+def _compact_recent_messages(value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+    compact: list[dict[str, str]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").lower()
+        if role not in {"user", "assistant"}:
+            continue
+        content = str(item.get("summary") or item.get("content") or item.get("text") or "")
+        content = " ".join(content.split())[:500]
+        if not content:
+            continue
+        compact.append({"role": role, "content": content})
+    return compact[-3:]
+
+
+def _is_question_or_clarification(lowered: str) -> bool:
+    text = str(lowered or "").strip()
+    if not text:
+        return False
+    if "?" in text:
+        return True
+    return bool(
+        re.search(
+            r"\b(?:do you need|should i|should we|would we|are you saying|so you(?:'re| are) saying|is this|does this|would this|can this|could this)\b",
+            text,
+            re.I,
+        )
+    )
 
 
 def _semantic_classify_with_codex_proxy(text: str, config: dict[str, Any]) -> dict[str, Any] | None:
