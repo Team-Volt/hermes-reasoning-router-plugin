@@ -60,7 +60,9 @@ High-complexity categories are counted. If a message hits at least `xhigh_high_m
 ├── __init__.py                     # plugin implementation
 ├── plugin.yaml                     # Hermes plugin metadata
 ├── examples/config.yaml            # example standalone config
+├── scripts/minilm_router_eval.py   # offline MiniLM/nearest-neighbor evaluator POC
 ├── tests/test_reasoning_router.py  # focused regression tests
+├── tests/test_minilm_router_eval.py
 └── README.md
 ```
 
@@ -220,12 +222,33 @@ When `decision_log: true`, the plugin writes JSONL rows to:
 
 Each row includes timestamp, platform, user/chat/thread IDs, session key, selected effort, routing reason, and a short message preview. Pending-intent approvals include the inherited pending effort and previews of the pending task.
 
+### Offline MiniLM evaluator POC
+
+`scripts/minilm_router_eval.py` is a read-only evaluator for the persistent JSONL log. It embeds historical message previews, runs leave-one-out nearest-neighbor effort prediction, and reports accuracy, confusion, and conflicted examples. It is a shadow-analysis tool only; it does not affect live routing.
+
+Run a dependency-free smoke with the built-in lexical hash embedder:
+
+```bash
+python scripts/minilm_router_eval.py --embedder lexical --limit 100
+```
+
+Run the actual MiniLM-style pass if `sentence-transformers` is installed and the model is available locally / downloadable:
+
+```bash
+python scripts/minilm_router_eval.py \
+  --embedder minilm \
+  --model sentence-transformers/all-MiniLM-L6-v2 \
+  --input ~/.hermes/logs/reasoning-router.jsonl
+```
+
+Use the report to decide whether a local semantic-neighbor layer is useful before adding any live-routing integration.
+
 ## Test
 
 From this repository:
 
 ```bash
-python -m py_compile __init__.py
+python -m py_compile __init__.py scripts/minilm_router_eval.py
 python -m pytest -q tests -o 'addopts='
 ```
 
