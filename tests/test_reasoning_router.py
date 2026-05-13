@@ -284,6 +284,42 @@ def test_short_ordinary_question_still_routes_low():
     assert effort == "low"
     assert "quick" in reason
 
+
+def test_explicit_set_snippet_intro_routes_medium_not_low():
+    plugin = load_plugin()
+
+    effort, reason = plugin.classify_message(
+        "Set this one please:\n"
+        "```display:\n"
+        "  background_process_notifications: off```"
+    )
+
+    assert effort == "medium"
+    assert "config snippet" in reason
+
+
+def test_service_shutdown_request_routes_xhigh_not_low():
+    plugin = load_plugin()
+
+    effort, reason = plugin.classify_message(
+        "I think at this point we can shut down the gbrain mcp"
+    )
+
+    assert effort == "xhigh"
+    assert "service-control" in reason or "xhigh" in reason
+
+
+def test_docs_restart_wording_stays_medium_after_service_control_tweak():
+    plugin = load_plugin()
+
+    effort, reason = plugin.classify_message(
+        "In the README, say the user may need to restart the gateway after installation"
+    )
+
+    assert effort == "medium"
+    assert "documentation wording" in reason
+
+
 def test_disabled_router_does_nothing():
     plugin = load_plugin()
     gateway = FakeGateway({"reasoning_router": {"enabled": False}})

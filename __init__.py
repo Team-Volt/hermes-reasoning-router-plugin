@@ -49,6 +49,8 @@ _XHIGH_PATTERNS = (
     r"\b(architecture|architectural|design\s+decision|tradeoff|strategy|migration\s+plan)\b",
     r"\b(security|auth|oauth|credential|secret|permission|token|ssrf|injection)\b",
     r"\b(production|rollback\s+safety|rollback-safe|data\s+loss|incident|outage)\b",
+    r"\b(?:shut\s*down|shutdown|stop|disable|restart)\b.{0,120}\b(?:mcp|gateway|daemon|systemd|service|container|docker|postgres|redis|api|worker|server)\b",
+    r"\b(?:mcp|gateway|daemon|systemd|service|container|docker|postgres|redis|api|worker|server)\b.{0,120}\b(?:shut\s*down|shutdown|stop|disable|restart)\b",
     r"\b(restart\s+the\s+gateway|gateway\s+restart|restart\s+hermes|systemd\s+restart)\b",
     r"\b(multi[-\s]?system|cross[-\s]?system|multiple\s+systems|orchestrat(?:e|ion))\b",
     r"\b(?:delete|remove|purge)\b.{0,160}\bfork\b.{0,220}\b(?:update|switch|migrate|roll\s*out|rollout)\b.{0,120}\b(?:ha|home\s*assistant|hacs)\b",
@@ -60,7 +62,7 @@ _XHIGH_PATTERNS = (
 
 _DOCS_POLISH_PATTERNS = (
     r"\b(readme|docs?|documentation|install(?:ation)?\s+instructions?|prompt|copy[-\s]?paste\s+prompt|wording)\b",
-    r"\b(overly\s+descriptive|wording|generic|standard[is]ed|style|mention|document|macos|linux|systemctl|restart\s+instructions?|ask\s+the\s+user\s+to\s+restart)\b",
+    r"\b(overly\s+descriptive|wording|generic|standard[is]ed|style|mention|document|macos|linux|systemctl|restart\s+instructions?|need\s+to\s+restart|restart\s+the\s+gateway|ask\s+the\s+user\s+to\s+restart)\b",
 )
 
 _DOCS_POLISH_RISK_PATTERNS = (
@@ -446,6 +448,9 @@ def classify_message(text: str, config: dict[str, Any] | None = None) -> tuple[s
     if _matches(_COMPILED_MEDIUM_OPINION, lowered):
         return _clamp_effort("medium", cfg), "matched opinion/take request"
 
+    if _is_explicit_config_snippet_request(text):
+        return _clamp_effort("medium", cfg), "matched explicit config snippet request"
+
     if _matches(_COMPILED_LOW, lowered) or len(normalized) <= _safe_int(cfg.get("low_char_limit"), 80):
         return _clamp_effort("low", cfg), "quick/simple message"
 
@@ -602,6 +607,30 @@ def _is_docs_polish_request(text: str) -> bool:
 
 def _matched_high_groups(text: str) -> list[str]:
     return [name for name, patterns in _COMPILED_HIGH_GROUPS.items() if _matches(patterns, text)]
+
+
+def _is_explicit_config_snippet_request(text: str) -> bool:
+    raw = str(text or "")
+    if "\n" not in raw and "\r" not in raw:
+        return False
+
+    first_line = raw.splitlines()[0] if raw.splitlines() else ""
+    if not re.search(r"\b(?:set|configure|change|apply|use)\b", first_line, re.I):
+        return False
+    if not re.search(r"\bconfigure\b", first_line, re.I) and not re.search(
+        r"\b(?:this|that|it|config|configuration|setting|value)\b",
+        first_line,
+        re.I,
+    ):
+        return False
+
+    if re.search(r":\s*\r?\n\s*$", raw):
+        return True
+
+    return bool(
+        re.search(r"```(?:yaml|yml)?\s*\r?\n", raw, re.I)
+        or re.search(r"(?m)^\s*[-\w.\"']+\s*:\s*\S+", raw)
+    )
 
 
 def _router_config(gateway) -> dict[str, Any]:
