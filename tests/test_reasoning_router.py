@@ -351,6 +351,107 @@ def test_single_file_remove_mention_does_not_route_xhigh():
     assert "documentation wording" in reason
 
 
+def test_semantic_classifier_is_disabled_by_default(monkeypatch):
+    plugin = load_plugin()
+    calls = []
+
+    def fake_semantic_classifier(*args, **kwargs):
+        calls.append((args, kwargs))
+        return {"effort": "medium", "confidence": 0.99, "reason": "fake"}
+
+    monkeypatch.setattr(plugin, "_semantic_classify_with_codex_proxy", fake_semantic_classifier)
+
+    effort, reason = plugin.classify_message("Set this one please")
+
+    assert calls == []
+    assert effort == "low"
+    assert "quick" in reason
+
+
+def test_semantic_classifier_can_raise_ambiguous_short_request(monkeypatch):
+    plugin = load_plugin()
+
+    def fake_semantic_classifier(text, config):
+        assert text == "Set this one please"
+        assert config["semantic_classifier_model"] == "gpt-5.4-mini"
+        return {
+            "effort": "medium",
+            "confidence": 0.91,
+            "risk_categories": ["config_change"],
+            "reason": "short imperative likely asks to change config",
+        }
+
+    monkeypatch.setattr(plugin, "_semantic_classify_with_codex_proxy", fake_semantic_classifier)
+
+    effort, reason = plugin.classify_message(
+        "Set this one please",
+        {"semantic_classifier_enabled": True},
+    )
+
+    assert effort == "medium"
+    assert "semantic classifier" in reason
+    assert "config_change" in reason
+
+
+def test_semantic_classifier_low_confidence_falls_back(monkeypatch):
+    plugin = load_plugin()
+
+    def fake_semantic_classifier(text, config):
+        return {
+            "effort": "high",
+            "confidence": 0.42,
+            "risk_categories": ["uncertain"],
+            "reason": "not sure",
+        }
+
+    monkeypatch.setattr(plugin, "_semantic_classify_with_codex_proxy", fake_semantic_classifier)
+
+    effort, reason = plugin.classify_message(
+        "Set this one please",
+        {"semantic_classifier_enabled": True, "semantic_classifier_min_confidence": 0.75},
+    )
+
+    assert effort == "low"
+    assert "quick" in reason
+
+
+def test_semantic_classifier_does_not_lower_or_call_for_obvious_xhigh(monkeypatch):
+    plugin = load_plugin()
+    calls = []
+
+    def fake_semantic_classifier(*args, **kwargs):
+        calls.append((args, kwargs))
+        return {"effort": "low", "confidence": 0.99, "reason": "fake"}
+
+    monkeypatch.setattr(plugin, "_semantic_classify_with_codex_proxy", fake_semantic_classifier)
+
+    effort, reason = plugin.classify_message(
+        "Please restart the gateway",
+        {"semantic_classifier_enabled": True},
+    )
+
+    assert calls == []
+    assert effort == "xhigh"
+    assert "xhigh" in reason
+
+
+def test_semantic_classifier_prompt_is_minimal_and_json_only():
+    plugin = load_plugin()
+
+    messages = plugin._semantic_classifier_messages(
+        "Set this one please",
+        {"last_assistant_intent": "apply a config change"},
+    )
+    serialized = json.dumps(messages)
+
+    assert [message["role"] for message in messages] == ["system", "user"]
+    assert "Return JSON only" in messages[0]["content"]
+    assert "Hermes Agent" not in serialized
+    assert "SOUL.md" not in serialized
+    assert "tool" not in serialized.lower()
+    assert "apply a config change" in serialized
+
+
 def test_disabled_router_does_nothing():
     plugin = load_plugin()
     gateway = FakeGateway({"reasoning_router": {"enabled": False}})
