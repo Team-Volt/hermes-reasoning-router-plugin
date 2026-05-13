@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -45,6 +46,20 @@ class FakeSessionStore:
 
     def _ensure_loaded(self):
         self.loaded = True
+
+
+def seed_state_db(root: Path, session_id: str, rows: list[tuple[str, str]]) -> None:
+    con = sqlite3.connect(root / "state.db")
+    con.execute(
+        "CREATE TABLE messages (id INTEGER PRIMARY KEY, session_id TEXT NOT NULL, role TEXT NOT NULL, content TEXT, tool_call_id TEXT, tool_calls TEXT, tool_name TEXT, timestamp REAL NOT NULL)"
+    )
+    for idx, (role, content) in enumerate(rows, start=1):
+        con.execute(
+            "INSERT INTO messages (session_id, role, content, timestamp) VALUES (?, ?, ?, ?)",
+            (session_id, role, content, float(idx)),
+        )
+    con.commit()
+    con.close()
 
 
 def event(text: str):
@@ -505,6 +520,52 @@ def test_semantic_classifier_messages_include_compact_recent_context():
     assert payload["pending_action"] == "create_cron_job"
     assert [item["role"] for item in payload["recent_messages"]] == ["assistant", "user", "assistant"]
     assert "tool output" not in messages[1]["content"]
+
+
+def test_gateway_path_supplies_recent_session_context(tmp_path, monkeypatch):
+    plugin = load_plugin()
+    session_key = "discord:user-1:chat-1:thread-1"
+    session_id = "session-ctx"
+    seed_state_db(
+        tmp_path,
+        session_id,
+        [
+            ("user", "Can old sessions be pruned automatically?"),
+            ("assistant", "We can create a cron automation for session pruning."),
+            ("tool", "ignored tool result"),
+        ],
+    )
+    captured = {}
+
+    def fake_semantic_classifier(text, config):
+        captured["text"] = text
+        captured["recent_messages"] = config.get("recent_messages")
+        captured["last_assistant_intent"] = config.get("last_assistant_intent")
+        return {
+            "effort": "medium",
+            "confidence": 0.91,
+            "risk_categories": ["automation"],
+            "reason": "context resolved terse approval",
+        }
+
+    monkeypatch.setattr(plugin, "_semantic_classify_with_codex_proxy", fake_semantic_classifier)
+    gateway = FakeGateway({"reasoning_router": {"semantic_classifier_enabled": True}})
+    store = FakeSessionStore(session_key, session_id)
+
+    result = plugin.pre_gateway_dispatch(
+        event("Set this one please"),
+        gateway=gateway,
+        session_store=store,
+    )
+
+    assert result == {"action": "allow"}
+    assert captured["text"] == "Set this one please"
+    assert captured["recent_messages"] == [
+        {"role": "user", "content": "Can old sessions be pruned automatically?"},
+        {"role": "assistant", "content": "We can create a cron automation for session pruning."},
+    ]
+    assert captured["last_assistant_intent"] == "We can create a cron automation for session pruning."
+    assert gateway.calls == [(session_key, {"enabled": True, "effort": "medium"})]
 
 
 def test_semantic_classifier_today_snippet_expectations(monkeypatch):

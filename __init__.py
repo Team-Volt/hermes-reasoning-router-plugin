@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import re
+import sqlite3
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -758,11 +759,23 @@ def _effective_effort_for_message(
     session_store=None,
     session_key: str = "",
 ) -> tuple[str, str, dict[str, Any] | None]:
-    effort, reason = classify_message(text, config)
+    session_id = _session_id_for_key(session_store, session_key)
+    route_config = dict(config)
+    if session_id:
+        recent_messages = _recent_messages_for_session(session_id)
+        if recent_messages:
+            route_config["recent_messages"] = recent_messages
+            last_assistant = next(
+                (item.get("content", "") for item in reversed(recent_messages) if item.get("role") == "assistant"),
+                "",
+            )
+            if last_assistant and not route_config.get("last_assistant_intent"):
+                route_config["last_assistant_intent"] = last_assistant[:500]
+
+    effort, reason = classify_message(text, route_config)
     if not _truthy(config.get("pending_intent_enabled", True)):
         return effort, reason, None
 
-    session_id = _session_id_for_key(session_store, session_key)
     pending = _active_pending_intent(session_id, config) if session_id else None
     if not pending:
         return effort, reason, None
@@ -784,6 +797,41 @@ def _effective_effort_for_message(
         _consume_pending_intent(session_id)
 
     return effort, reason, None
+
+
+def _recent_messages_for_session(session_id: str, limit: int = 3) -> list[dict[str, str]]:
+    sid = str(session_id or "").strip()
+    if not sid:
+        return []
+    db_path = _hermes_home() / "state.db"
+    if not db_path.exists():
+        return []
+    try:
+        with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=1.0) as con:
+            rows = list(
+                con.execute(
+                    """
+                    SELECT role, content
+                    FROM messages
+                    WHERE session_id = ?
+                      AND role IN ('user', 'assistant')
+                      AND COALESCE(content, '') != ''
+                    ORDER BY id DESC
+                    LIMIT ?
+                    """,
+                    (sid, max(limit * 3, limit)),
+                )
+            )
+    except Exception as exc:
+        logger.debug("reasoning-router: failed to read recent session messages: %s", exc)
+        return []
+
+    recent: list[dict[str, str]] = []
+    for role, content in reversed(rows):
+        compact = " ".join(str(content or "").split())[:500]
+        if compact:
+            recent.append({"role": str(role), "content": compact})
+    return recent[-limit:]
 
 
 def _max_effort(efforts: Iterable[str], config: dict[str, Any]) -> str:
