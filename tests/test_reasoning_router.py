@@ -320,6 +320,37 @@ def test_docs_restart_wording_stays_medium_after_service_control_tweak():
     assert "documentation wording" in reason
 
 
+def test_pr_and_merge_request_routes_high_not_low():
+    plugin = load_plugin()
+
+    effort, reason = plugin.classify_message("You should make a PR and merge it")
+
+    assert effort == "high"
+    assert "github workflow" in reason
+
+
+def test_backup_all_skills_remove_any_mentions_routes_xhigh():
+    plugin = load_plugin()
+
+    effort, reason = plugin.classify_message(
+        "Back up our current skills. Look through all of them and remove any mention of the retired archive. We're done with that thing"
+    )
+
+    assert effort == "xhigh"
+    assert "xhigh" in reason
+
+
+def test_single_file_remove_mention_does_not_route_xhigh():
+    plugin = load_plugin()
+
+    effort, reason = plugin.classify_message(
+        "In the README, remove any mention of the old option"
+    )
+
+    assert effort == "medium"
+    assert "documentation wording" in reason
+
+
 def test_disabled_router_does_nothing():
     plugin = load_plugin()
     gateway = FakeGateway({"reasoning_router": {"enabled": False}})
