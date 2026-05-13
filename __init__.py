@@ -552,7 +552,7 @@ def _semantic_route_for_ambiguous_message(
     # These are cheap, explicit low signals. Length alone is not treated as
     # obvious-low because short imperatives like "Set this one please" are the
     # exact ambiguous class this POC is meant to catch.
-    if _matches(_COMPILED_LOW, lowered):
+    if _matches(_COMPILED_LOW, lowered) and not _is_question_or_clarification(lowered):
         return None
 
     try:

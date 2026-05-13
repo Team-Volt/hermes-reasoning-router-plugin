@@ -513,6 +513,7 @@ def test_semantic_classifier_today_snippet_expectations(monkeypatch):
     fake_outputs = {
         "Do you need me to restart the gateway?": {"effort": "medium", "confidence": 0.93, "risk_categories": ["service_restart_question"], "reason": "question only"},
         "So you're saying we feed all prompts through something like gpt-5.4-mini first, to determine what reasoning level the task should actually complete as?": {"effort": "medium", "confidence": 0.92, "risk_categories": ["design_clarification"], "reason": "clarification"},
+        "So you're saying we feed all prompts through something like gpt-5.4-mini first?": {"effort": "medium", "confidence": 0.92, "risk_categories": ["design_clarification"], "reason": "clarification"},
     }
 
     def fake_semantic_classifier(text, config):
@@ -523,6 +524,7 @@ def test_semantic_classifier_today_snippet_expectations(monkeypatch):
     cases = [
         ("Do you need me to restart the gateway?", "medium"),
         ("So you're saying we feed all prompts through something like gpt-5.4-mini first, to determine what reasoning level the task should actually complete as?", "medium"),
+        ("So you're saying we feed all prompts through something like gpt-5.4-mini first?", "medium"),
         ("You should make a PR and merge it", "high"),
         ("I think at this point we can shut down the gbrain mcp", "xhigh"),
     ]
