@@ -49,6 +49,8 @@ _XHIGH_PATTERNS = (
     r"\b(architecture|architectural|design\s+decision|tradeoff|strategy|migration\s+plan)\b",
     r"\b(security|auth|oauth|credential|secret|permission|token|ssrf|injection)\b",
     r"\b(production|rollback\s+safety|rollback-safe|data\s+loss|incident|outage)\b",
+    r"\b(?:back\s*up|backup|rollback|restore)\b.{0,200}\b(?:all\s+of\s+them|all\s+(?:current\s+)?skills?|all\s+(?:files?|docs?|references?|pages?)|every|entire|whole|bulk)\b.{0,200}\b(?:remove|delete|scrub|purge|strip)\b",
+    r"\b(?:all\s+of\s+them|all\s+(?:current\s+)?skills?|all\s+(?:files?|docs?|references?|pages?)|every|entire|whole|bulk|back\s*up|backup|rollback|restore)\b.{0,200}\b(?:remove|delete|scrub|purge|strip)\b.{0,120}\b(?:any|all|every)\s+(?:mention|mentions|reference|references|occurrence|occurrences)\b",
     r"\b(?:shut\s*down|shutdown|stop|disable|restart)\b.{0,120}\b(?:mcp|gateway|daemon|systemd|service|container|docker|postgres|redis|api|worker|server)\b",
     r"\b(?:mcp|gateway|daemon|systemd|service|container|docker|postgres|redis|api|worker|server)\b.{0,120}\b(?:shut\s*down|shutdown|stop|disable|restart)\b",
     r"\b(restart\s+the\s+gateway|gateway\s+restart|restart\s+hermes|systemd\s+restart)\b",
@@ -109,6 +111,11 @@ _HIGH_PATTERN_GROUPS = {
     ),
     "logging_audit": (
         r"\b(log|logs|logging|audit|jsonl|persistent)\b",
+    ),
+    "github workflow": (
+        r"\b(?:make|open|create)\s+(?:a\s+)?(?:pr|prs|pr's|pull\s+requests?)\b.{0,80}\bmerge\b",
+        r"\b(?:pr|prs|pr's|pull\s+requests?)\b.{0,80}\bmerge\b",
+        r"\bmerge\b.{0,80}\b(?:pr|prs|pr's|pull\s+requests?)\b",
     ),
 }
 
