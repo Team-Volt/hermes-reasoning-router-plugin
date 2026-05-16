@@ -11,7 +11,10 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
+import sqlite3
+import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -36,6 +39,15 @@ DEFAULT_CONFIG = {
     "decision_log_path": "logs/reasoning-router.jsonl",
     "low_char_limit": 80,
     "xhigh_high_match_threshold": 4,
+    # Disabled-by-default POC: an isolated codex-proxy classifier can raise
+    # ambiguous low/default deterministic routes without replacing guardrails.
+    "semantic_classifier_enabled": False,
+    "semantic_classifier_url": "http://127.0.0.1:8080/v1/chat/completions",
+    "semantic_classifier_model": "gpt-5.4-mini",
+    "semantic_classifier_api_key": "",
+    "semantic_classifier_timeout_seconds": 8,
+    "semantic_classifier_min_confidence": 0.75,
+    "semantic_classifier_max_chars": 1200,
     # Carry task complexity across terse approvals like "yes" / "go ahead".
     "pending_intent_enabled": True,
     "pending_intent_ttl_minutes": 30,
@@ -139,7 +151,7 @@ _MEDIUM_OPINION_PATTERNS = (
 )
 
 _LOW_PATTERNS = (
-    r"^(thanks|thank you|ok|okay|yes|no|yep|nope|cool|nice)[.!?\s]*$",
+    r"^(?:lol|haha|lmao|heh)?\s*(thanks|thank you|ok|okay|yes|no|yep|nope|cool|nice)[.!?\s]*$",
     r"\b(what\s+time|what\s+date|who\s+is|what\s+is)\b",
     r"\b(quick|brief|one\s+sentence|short answer)\b",
 )
@@ -428,8 +440,21 @@ def classify_message(text: str, config: dict[str, Any] | None = None) -> tuple[s
         return _clamp_effort("medium", cfg), "documentation wording/install-prompt polish"
 
     # Strongest wins. Avoid low-routing a short sentence like "go ahead and set
-    # up the automation" just because it is brief.
+    # up the automation" just because it is brief. Question/clarification forms
+    # get one semantic pass so words like "restart gateway" do not over-route
+    # when the user is only asking whether a restart is needed.
     if _matches(_COMPILED_XHIGH, lowered):
+        if _is_question_or_clarification(lowered):
+            semantic_route = _semantic_route_for_ambiguous_message(
+                text,
+                lowered,
+                cfg,
+                baseline_effort="xhigh",
+                baseline_reason="matched xhigh complexity/risk keywords",
+                allow_lowering=True,
+            )
+            if semantic_route is not None:
+                return semantic_route
         return _clamp_effort("xhigh", cfg), "matched xhigh complexity/risk keywords"
 
     if _matches(_COMPILED_IMPLEMENTATION_APPROVAL, lowered):
@@ -438,15 +463,39 @@ def classify_message(text: str, config: dict[str, Any] | None = None) -> tuple[s
     high_groups = _matched_high_groups(lowered)
     threshold = _safe_int(cfg.get("xhigh_high_match_threshold"), DEFAULT_CONFIG["xhigh_high_match_threshold"])
     if len(high_groups) >= threshold:
+        baseline_reason = f"matched multiple high-complexity categories: {', '.join(high_groups)}"
+        if _is_question_or_clarification(lowered):
+            semantic_route = _semantic_route_for_ambiguous_message(
+                text,
+                lowered,
+                cfg,
+                baseline_effort="xhigh",
+                baseline_reason=baseline_reason,
+                allow_lowering=True,
+            )
+            if semantic_route is not None:
+                return semantic_route
         return (
             _clamp_effort("xhigh", cfg),
-            f"matched multiple high-complexity categories: {', '.join(high_groups)}",
+            baseline_reason,
         )
 
     if high_groups:
+        baseline_reason = f"matched high-complexity category: {', '.join(high_groups)}"
+        if _is_question_or_clarification(lowered):
+            semantic_route = _semantic_route_for_ambiguous_message(
+                text,
+                lowered,
+                cfg,
+                baseline_effort="high",
+                baseline_reason=baseline_reason,
+                allow_lowering=True,
+            )
+            if semantic_route is not None:
+                return semantic_route
         return (
             _clamp_effort("high", cfg),
-            f"matched high-complexity category: {', '.join(high_groups)}",
+            baseline_reason,
         )
 
     if _matches(_COMPILED_MEDIUM_TECH_FOLLOWUP, lowered):
@@ -457,6 +506,10 @@ def classify_message(text: str, config: dict[str, Any] | None = None) -> tuple[s
 
     if _is_explicit_config_snippet_request(text):
         return _clamp_effort("medium", cfg), "matched explicit config snippet request"
+
+    semantic_route = _semantic_route_for_ambiguous_message(text, lowered, cfg)
+    if semantic_route is not None:
+        return semantic_route
 
     if _matches(_COMPILED_LOW, lowered) or len(normalized) <= _safe_int(cfg.get("low_char_limit"), 80):
         return _clamp_effort("low", cfg), "quick/simple message"
@@ -470,6 +523,235 @@ def classify_message(text: str, config: dict[str, Any] | None = None) -> tuple[s
     return _clamp_effort(default, cfg), "default route"
 
 
+def _semantic_route_for_ambiguous_message(
+    text: str,
+    lowered: str,
+    config: dict[str, Any],
+    *,
+    baseline_effort: str = "low",
+    baseline_reason: str = "quick/simple message",
+    allow_lowering: bool = False,
+) -> tuple[str, str] | None:
+    """Optionally adjust an ambiguous deterministic route with an isolated classifier.
+
+    The POC is deliberately conservative: it is disabled by default, skips
+    obvious low chatter, raises low/default routes, and lowers high/xhigh only
+    for question/clarification forms that look like deterministic false positives.
+    """
+    if not _truthy(config.get("semantic_classifier_enabled", False)):
+        return None
+
+    normalized = " ".join(str(text or "").split())
+    if not normalized:
+        return None
+    if len(normalized) > _safe_int(
+        config.get("semantic_classifier_max_chars"),
+        DEFAULT_CONFIG["semantic_classifier_max_chars"],
+    ):
+        return None
+
+    # These are cheap, explicit low signals. Length alone is not treated as
+    # obvious-low because short imperatives like "Set this one please" are the
+    # exact ambiguous class this POC is meant to catch.
+    if _matches(_COMPILED_LOW, lowered) and not _is_question_or_clarification(lowered):
+        return None
+
+    try:
+        result = _semantic_classify_with_codex_proxy(text, config)
+    except Exception as exc:
+        logger.warning("reasoning-router: semantic classifier failed: %s", exc)
+        return None
+
+    parsed = _normalize_semantic_classifier_result(result)
+    if not parsed:
+        return None
+
+    effort = str(parsed.get("effort") or "").lower()
+    confidence = float(parsed.get("confidence") or 0.0)
+    min_confidence = float(
+        config.get(
+            "semantic_classifier_min_confidence",
+            DEFAULT_CONFIG["semantic_classifier_min_confidence"],
+        )
+    )
+    if confidence < min_confidence:
+        return None
+
+    baseline = _clamp_effort(baseline_effort, config)
+    routed = _clamp_effort(effort, config)
+    baseline_idx = EFFORT_ORDER.index(baseline)
+    routed_idx = EFFORT_ORDER.index(routed)
+
+    categories = parsed.get("risk_categories") or []
+    if isinstance(categories, str):
+        categories = [categories]
+    category_text = ", ".join(str(item) for item in categories if str(item).strip())
+    reason = str(parsed.get("reason") or "semantic classification").strip()
+    if category_text:
+        reason = f"{reason}; categories: {category_text}"
+
+    if routed_idx > baseline_idx:
+        return routed, f"semantic classifier raised ambiguous route to {routed}: {reason}"
+    if allow_lowering and routed_idx < baseline_idx and routed_idx >= EFFORT_ORDER.index("medium"):
+        return routed, f"semantic classifier lowered question/clarification route from {baseline}: {reason}"
+    return None
+
+
+def _normalize_semantic_classifier_result(result: Any) -> dict[str, Any] | None:
+    if isinstance(result, str):
+        try:
+            result = json.loads(_extract_json_object(result))
+        except Exception:
+            return None
+    if not isinstance(result, dict):
+        return None
+
+    effort = str(result.get("effort") or "").lower()
+    if effort not in EFFORT_ORDER:
+        return None
+    if effort in {"none", "minimal"}:
+        effort = "low"
+
+    try:
+        confidence = float(result.get("confidence", 0.0))
+    except Exception:
+        return None
+    confidence = max(0.0, min(1.0, confidence))
+
+    categories = result.get("risk_categories") or []
+    if not isinstance(categories, list):
+        categories = [str(categories)]
+
+    return {
+        "effort": effort,
+        "confidence": confidence,
+        "risk_categories": categories[:8],
+        "reason": str(result.get("reason") or "").strip()[:240],
+    }
+
+
+def _extract_json_object(text: str) -> str:
+    raw = str(text or "").strip()
+    if raw.startswith("{") and raw.endswith("}"):
+        return raw
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start < 0 or end <= start:
+        raise ValueError("no JSON object found")
+    return raw[start : end + 1]
+
+
+def _semantic_classifier_messages(
+    text: str,
+    context: dict[str, Any] | None = None,
+) -> list[dict[str, str]]:
+    ctx = context if isinstance(context, dict) else {}
+    payload = {
+        "current_user_message": str(text or "")[:1200],
+        "last_assistant_intent": str(ctx.get("last_assistant_intent") or "")[:500],
+        "pending_action": str(ctx.get("pending_action") or "")[:120],
+        "recent_messages": _compact_recent_messages(ctx.get("recent_messages")),
+    }
+    system = (
+        "You are a routing classifier. Return JSON only. "
+        "Classify the user request into exactly one effort: low, medium, high, xhigh. "
+        "Use last_assistant_intent and recent_messages only to resolve terse approvals, deictic references, and pending action scope. "
+        "Treat terse deictic imperatives that ask to set, change, apply, use, or do this/that/it as medium unless they are clearly casual chatter. "
+        "low: trivial thanks/status/simple factual reply. "
+        "medium: explanation, research, inspection, simple reversible action, or one setting value change. "
+        "high: coding, config changes with files/tests, debugging, verification-heavy work, or GitHub workflow. "
+        "xhigh: architecture, multi-system changes, migrations, auth/security/secrets, destructive or rollback-sensitive actions, service restarts, deploys. "
+        "Return keys: effort, confidence, risk_categories, reason. "
+        "confidence must be a number from 0 to 1. Do not solve the request."
+    )
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": json.dumps(payload, ensure_ascii=False, sort_keys=True)},
+    ]
+
+
+def _compact_recent_messages(value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+    compact: list[dict[str, str]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").lower()
+        if role not in {"user", "assistant"}:
+            continue
+        content = str(item.get("summary") or item.get("content") or item.get("text") or "")
+        content = " ".join(content.split())[:500]
+        if not content:
+            continue
+        compact.append({"role": role, "content": content})
+    return compact[-3:]
+
+
+def _is_question_or_clarification(lowered: str) -> bool:
+    text = str(lowered or "").strip()
+    if not text:
+        return False
+    if "?" in text:
+        return True
+    return bool(
+        re.search(
+            r"\b(?:do you need|should i|should we|would we|are you saying|so you(?:'re| are) saying|is this|does this|would this|can this|could this)\b",
+            text,
+            re.I,
+        )
+    )
+
+
+def _semantic_classify_with_codex_proxy(text: str, config: dict[str, Any]) -> dict[str, Any] | None:
+    url = str(config.get("semantic_classifier_url") or DEFAULT_CONFIG["semantic_classifier_url"])
+    model = str(config.get("semantic_classifier_model") or DEFAULT_CONFIG["semantic_classifier_model"])
+    api_key = str(
+        config.get("semantic_classifier_api_key")
+        or os.environ.get("CODEX_PROXY_API_KEY")
+        or os.environ.get("OPENAI_API_KEY")
+        or DEFAULT_CONFIG["semantic_classifier_api_key"]
+    )
+    timeout = max(
+        1,
+        _safe_int(
+            config.get("semantic_classifier_timeout_seconds"),
+            DEFAULT_CONFIG["semantic_classifier_timeout_seconds"],
+        ),
+    )
+    payload = {
+        "model": model,
+        "messages": _semantic_classifier_messages(text, config),
+        "max_tokens": 220,
+        "temperature": 0,
+    }
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        response_payload = json.loads(response.read().decode("utf-8"))
+
+    choices = response_payload.get("choices") if isinstance(response_payload, dict) else None
+    if not choices:
+        return None
+    message = choices[0].get("message") if isinstance(choices[0], dict) else None
+    content = message.get("content") if isinstance(message, dict) else None
+    if isinstance(content, list):
+        content = "".join(
+            str(item.get("text") or item.get("content") or "") if isinstance(item, dict) else str(item)
+            for item in content
+        )
+    if not isinstance(content, str) or not content.strip():
+        return None
+    return _normalize_semantic_classifier_result(content)
+
+
 def _effective_effort_for_message(
     text: str,
     config: dict[str, Any],
@@ -477,11 +759,23 @@ def _effective_effort_for_message(
     session_store=None,
     session_key: str = "",
 ) -> tuple[str, str, dict[str, Any] | None]:
-    effort, reason = classify_message(text, config)
+    session_id = _session_id_for_key(session_store, session_key)
+    route_config = dict(config)
+    if session_id:
+        recent_messages = _recent_messages_for_session(session_id)
+        if recent_messages:
+            route_config["recent_messages"] = recent_messages
+            last_assistant = next(
+                (item.get("content", "") for item in reversed(recent_messages) if item.get("role") == "assistant"),
+                "",
+            )
+            if last_assistant and not route_config.get("last_assistant_intent"):
+                route_config["last_assistant_intent"] = last_assistant[:500]
+
+    effort, reason = classify_message(text, route_config)
     if not _truthy(config.get("pending_intent_enabled", True)):
         return effort, reason, None
 
-    session_id = _session_id_for_key(session_store, session_key)
     pending = _active_pending_intent(session_id, config) if session_id else None
     if not pending:
         return effort, reason, None
@@ -503,6 +797,41 @@ def _effective_effort_for_message(
         _consume_pending_intent(session_id)
 
     return effort, reason, None
+
+
+def _recent_messages_for_session(session_id: str, limit: int = 3) -> list[dict[str, str]]:
+    sid = str(session_id or "").strip()
+    if not sid:
+        return []
+    db_path = _hermes_home() / "state.db"
+    if not db_path.exists():
+        return []
+    try:
+        with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=1.0) as con:
+            rows = list(
+                con.execute(
+                    """
+                    SELECT role, content
+                    FROM messages
+                    WHERE session_id = ?
+                      AND role IN ('user', 'assistant')
+                      AND COALESCE(content, '') != ''
+                    ORDER BY id DESC
+                    LIMIT ?
+                    """,
+                    (sid, max(limit * 3, limit)),
+                )
+            )
+    except Exception as exc:
+        logger.debug("reasoning-router: failed to read recent session messages: %s", exc)
+        return []
+
+    recent: list[dict[str, str]] = []
+    for role, content in reversed(rows):
+        compact = " ".join(str(content or "").split())[:500]
+        if compact:
+            recent.append({"role": str(role), "content": compact})
+    return recent[-limit:]
 
 
 def _max_effort(efforts: Iterable[str], config: dict[str, Any]) -> str:
