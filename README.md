@@ -1,14 +1,14 @@
 # reasoning-router
 
-`reasoning-router` is a Hermes gateway plugin that automatically chooses the reasoning effort for each incoming Discord message.
+`reasoning-router` is a Hermes gateway plugin that automatically chooses the reasoning effort for each incoming Discord or Telegram gateway message.
 
 It is useful when one chat contains both tiny messages (`thanks`, `what time is it?`) and deeper work (`debug this gateway issue`, `patch the plugin and verify it`). Instead of running every turn at the same reasoning level, the plugin classifies the incoming request and sets Hermes' real per-session reasoning override before the model request is made.
 
-> Current chat-surface support: **Discord only**. The plugin is written against Hermes gateway session behavior used by Discord. Cron jobs and other chat surfaces do not currently use this router.
+> Current chat-surface support: **Discord and Telegram gateway messages**. Telegram support uses Hermes' normalized `MessageEvent` / `SessionSource` path and has synthetic fixture coverage for Telegram session keys, topic/thread IDs, platform gating, and decision logging. Cron jobs and non-gateway surfaces do not use this router.
 
 ## What it does
 
-- Routes each Discord gateway message to one of:
+- Routes each enabled Discord or Telegram gateway message to one of:
   - `none`
   - `minimal`
   - `low`
@@ -30,7 +30,7 @@ It is useful when one chat contains both tiny messages (`thanks`, `what time is 
 The plugin registers two Hermes hooks:
 
 - `pre_gateway_dispatch`
-  - Runs before Hermes dispatches the incoming Discord message to the agent.
+  - Runs before Hermes dispatches the incoming gateway message to the agent.
   - Classifies the message with deterministic heuristics.
   - Sets the session reasoning override through Hermes' gateway session mechanism.
   - Fails open: if anything is missing or unsupported, the message is still allowed through.
@@ -72,7 +72,7 @@ High-complexity categories are counted. If a message hits at least `xhigh_high_m
 ## Requirements
 
 - Hermes Agent with gateway plugins available
-- A Discord gateway/chat surface
+- A Discord or Telegram gateway/chat surface
 - Python 3.11+
 
 ## Install
@@ -119,6 +119,12 @@ default: medium
 min: none
 max: xhigh
 
+# Gateway platforms the router may affect. Unsupported platforms pass through
+# without mutating session reasoning.
+enabled_platforms:
+  - discord
+  - telegram
+
 log_decisions: true
 decision_log: true
 decision_log_path: logs/reasoning-router.jsonl
@@ -149,6 +155,7 @@ Config fields:
 | `default` | `medium` | Fallback effort when no deterministic rule or accepted semantic result strongly matches. Valid efforts: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`. |
 | `min` | `none` | Minimum allowed effort after routing. Invalid values are ignored. |
 | `max` | `xhigh` | Maximum allowed effort after routing. Invalid values are ignored. If `min` is higher than `max`, the plugin swaps the clamp bounds. |
+| `enabled_platforms` | `[discord, telegram]` | Gateway platform allowlist. Platforms outside the list pass through unchanged. Use `all` or `*` only if you have verified the target gateway surface emits normal Hermes `MessageEvent` / `SessionSource` objects. |
 | `log_decisions` | `true` | Log concise routing decisions to the Hermes gateway logger / journal. |
 | `decision_log` | `false` | Write persistent JSONL routing decisions for later review. |
 | `decision_log_path` | `logs/reasoning-router.jsonl` | JSONL path. Relative paths resolve under `~/.hermes`; absolute paths are used as-is. |
@@ -175,6 +182,7 @@ min: none
 max: high
 log_decisions: true
 decision_log: false
+enabled_platforms: [discord, telegram]
 low_char_limit: 80
 xhigh_high_match_threshold: 4
 pending_intent_enabled: true
@@ -371,7 +379,7 @@ Install the Hermes reasoning-router plugin from https://github.com/Team-Volt/her
 Use the README as the source of truth. Install it as a Hermes user plugin, copy the example config, enable the plugin if this Hermes setup requires explicit plugin enablement, and verify that it loads.
 
 Important constraints:
-- It currently supports Discord only.
+- It supports Discord and Telegram gateway messages.
 - Do not edit Hermes source code.
 - Preserve existing Hermes config and enabled plugins.
 - Use profile-specific paths if this install uses a Hermes profile.
@@ -382,8 +390,8 @@ Important constraints:
 
 ## Notes and limitations
 
-- Discord is the only currently supported chat surface.
-- Cron jobs do not pass through the Discord gateway dispatch hook and therefore do not use this router.
+- Discord and Telegram gateway messages are the supported chat surfaces. Other platforms are ignored unless explicitly added to `enabled_platforms`, and should only be added after adapter/event-shape verification.
+- Cron jobs do not pass through the gateway dispatch hook and therefore do not use this router.
 - The plugin depends on Hermes gateway internals for session reasoning overrides. It guards those calls and fails open, but future Hermes changes could require a small compatibility update.
 - The default classifier is deterministic and intentionally inspectable; it is not an LLM judge.
 - The optional semantic classifier is a bounded ambiguity resolver, not the primary router. Keep it behind a local/protected endpoint and avoid storing real API keys in `config.yaml`.

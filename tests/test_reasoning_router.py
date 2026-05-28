@@ -62,12 +62,19 @@ def seed_state_db(root: Path, session_id: str, rows: list[tuple[str, str]]) -> N
     con.close()
 
 
-def event(text: str):
+def event(
+    text: str,
+    *,
+    platform: str = "discord",
+    user_id: str = "user-1",
+    chat_id: str = "chat-1",
+    thread_id: str | None = "thread-1",
+):
     source = SimpleNamespace(
-        platform=SimpleNamespace(value="discord"),
-        user_id="user-1",
-        chat_id="chat-1",
-        thread_id="thread-1",
+        platform=SimpleNamespace(value=platform),
+        user_id=user_id,
+        chat_id=chat_id,
+        thread_id=thread_id,
     )
     return SimpleNamespace(text=text, source=source, internal=False)
 
@@ -103,6 +110,68 @@ def test_simple_code_change_routes_high():
             {"enabled": True, "effort": "high"},
         )
     ]
+
+
+def test_telegram_message_routes_with_gateway_session_key():
+    plugin = load_plugin()
+    gateway = FakeGateway({"reasoning_router": {"enabled": True}})
+
+    result = plugin.pre_gateway_dispatch(
+        event(
+            "Patch the Telegram gateway handling and run the focused tests",
+            platform="telegram",
+            chat_id="tg-chat-1",
+            thread_id="topic-42",
+        ),
+        gateway=gateway,
+    )
+
+    assert result == {"action": "allow"}
+    assert gateway.calls == [
+        (
+            "telegram:user-1:tg-chat-1:topic-42",
+            {"enabled": True, "effort": "high"},
+        )
+    ]
+    decision = getattr(gateway, "_reasoning_router_decisions")["telegram:user-1:tg-chat-1:topic-42"]
+    assert decision["platform"] == "telegram"
+    assert decision["chat_id"] == "tg-chat-1"
+    assert decision["thread_id"] == "topic-42"
+
+
+def test_default_enabled_platforms_include_discord_and_telegram():
+    plugin = load_plugin()
+
+    assert plugin.DEFAULT_CONFIG["enabled_platforms"] == ["discord", "telegram"]
+
+
+def test_enabled_platforms_skips_platforms_outside_allowlist():
+    plugin = load_plugin()
+    gateway = FakeGateway(
+        {"reasoning_router": {"enabled": True, "enabled_platforms": ["discord", "telegram"]}}
+    )
+
+    result = plugin.pre_gateway_dispatch(
+        event("Patch the Slack gateway handling and run tests", platform="slack"),
+        gateway=gateway,
+    )
+
+    assert result == {"action": "allow"}
+    assert gateway.calls == []
+    assert not hasattr(gateway, "_reasoning_router_decisions")
+
+
+def test_enabled_platforms_can_disable_telegram_without_breaking_dispatch():
+    plugin = load_plugin()
+    gateway = FakeGateway({"reasoning_router": {"enabled": True, "enabled_platforms": ["discord"]}})
+
+    result = plugin.pre_gateway_dispatch(
+        event("Patch the plugin and run tests", platform="telegram"),
+        gateway=gateway,
+    )
+
+    assert result == {"action": "allow"}
+    assert gateway.calls == []
 
 
 def test_complex_multi_system_work_routes_xhigh():

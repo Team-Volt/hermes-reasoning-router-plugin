@@ -12,6 +12,12 @@ default: medium
 min: none
 max: xhigh
 
+# Gateway platforms the router may affect. Unsupported platforms pass through
+# without mutating session reasoning. Use all/* only after adapter verification.
+enabled_platforms:
+  - discord
+  - telegram
+
 # Emit concise routing decisions into the Hermes gateway journal.
 log_decisions: true
 
