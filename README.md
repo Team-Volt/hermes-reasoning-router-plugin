@@ -23,6 +23,7 @@ It is useful when one chat contains both tiny messages (`thanks`, `what time is 
   - User: “yes”
   - Router: inherits the planned task effort instead of treating `yes` as `low`.
 - Can log routing decisions to the gateway journal and/or a JSONL file for audits.
+- Can optionally call an OpenAI-compatible semantic classifier for ambiguous routes; this is disabled by default and bounded by confidence, length, min/max clamps, and deterministic guardrails.
 
 ## How it works
 
@@ -41,6 +42,8 @@ The plugin registers two Hermes hooks:
   - If the next user message is a short approval like `yes`, `go ahead`, or `do it`, the router consumes that pending intent and inherits the planned effort.
 
 Routing is intentionally conservative and explainable. It uses pattern groups for architecture, security, configuration, implementation, debugging, operations, destructive changes, verification, logging/audit, technical follow-ups, and simple acknowledgements.
+
+If `semantic_classifier_enabled` is true, deterministic routing still runs first. The semantic classifier is only asked to adjudicate ambiguous cases: short/default routes that might deserve escalation, and question/clarification forms that otherwise matched high-risk keywords. It can raise ambiguous routes, and it can lower question/clarification false positives only to `medium` or higher. It cannot bypass `min` / `max` clamps, does not handle slash commands, and is skipped for obvious low chatter or messages longer than `semantic_classifier_max_chars`.
 
 ## Routing guide
 
@@ -108,36 +111,111 @@ cp ~/.hermes/plugins/reasoning-router/examples/config.yaml \
 
 Legacy installs with `~/.hermes/plugins/reasoning-router/config.yaml` still read that file if the standalone config is missing, but slash-command writes now go to the standalone path.
 
-Example config:
+Example config with every supported persistent option:
 
 ```yaml
 enabled: true
 default: medium
-min: low
+min: none
 max: xhigh
+
 log_decisions: true
 decision_log: true
 decision_log_path: logs/reasoning-router.jsonl
+
 low_char_limit: 80
 xhigh_high_match_threshold: 4
+
 pending_intent_enabled: true
 pending_intent_ttl_minutes: 30
+
+# Optional live semantic classifier. Disabled by default.
+semantic_classifier_enabled: false
+semantic_classifier_url: http://127.0.0.1:8080/v1/chat/completions
+semantic_classifier_model: gpt-5.4-mini
+# Prefer CODEX_PROXY_API_KEY or OPENAI_API_KEY in the environment instead of
+# storing a key here. Leave empty to use env vars, or omit the field entirely.
+semantic_classifier_api_key: ""
+semantic_classifier_timeout_seconds: 8
+semantic_classifier_min_confidence: 0.75
+semantic_classifier_max_chars: 1200
 ```
 
 Config fields:
 
-| Field | Meaning |
-|---|---|
-| `enabled` | Turns the router on or off |
-| `default` | Fallback effort when no heuristic strongly matches |
-| `min` / `max` | Clamp all routing decisions into this range |
-| `log_decisions` | Log concise decisions to the gateway journal |
-| `decision_log` | Write persistent JSONL decisions for later review |
-| `decision_log_path` | JSONL path relative to `~/.hermes` unless absolute |
-| `low_char_limit` | Short-message cutoff used by the low-effort fallback |
-| `xhigh_high_match_threshold` | Number of high-complexity categories needed to escalate to `xhigh` |
-| `pending_intent_enabled` | Enable effort inheritance for short approvals |
-| `pending_intent_ttl_minutes` | Expiration window for pending approval intent |
+| Field | Default | Meaning |
+|---|---:|---|
+| `enabled` | `true` | Turns the router on or off. When off, messages pass through without changing reasoning. |
+| `default` | `medium` | Fallback effort when no deterministic rule or accepted semantic result strongly matches. Valid efforts: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`. |
+| `min` | `none` | Minimum allowed effort after routing. Invalid values are ignored. |
+| `max` | `xhigh` | Maximum allowed effort after routing. Invalid values are ignored. If `min` is higher than `max`, the plugin swaps the clamp bounds. |
+| `log_decisions` | `true` | Log concise routing decisions to the Hermes gateway logger / journal. |
+| `decision_log` | `false` | Write persistent JSONL routing decisions for later review. |
+| `decision_log_path` | `logs/reasoning-router.jsonl` | JSONL path. Relative paths resolve under `~/.hermes`; absolute paths are used as-is. |
+| `low_char_limit` | `80` | Short-message cutoff used by the low-effort fallback after stronger rules and semantic adjudication have had a chance to run. |
+| `xhigh_high_match_threshold` | `4` | Number of high-complexity categories needed to escalate to `xhigh` without an explicit xhigh/risk phrase. |
+| `pending_intent_enabled` | `true` | Enable one-shot effort inheritance for short approvals after the assistant asks to proceed. |
+| `pending_intent_ttl_minutes` | `30` | Expiration window for pending approval intent. Values below 1 are clamped to 1 minute. |
+| `semantic_classifier_enabled` | `false` | Enables the optional OpenAI-compatible classifier for ambiguous cases only. Deterministic guardrails still win. |
+| `semantic_classifier_url` | `http://127.0.0.1:8080/v1/chat/completions` | Chat-completions endpoint used by the semantic classifier. Intended for a local codex-proxy/OpenAI-compatible service. |
+| `semantic_classifier_model` | `gpt-5.4-mini` | Model name sent to the classifier endpoint. |
+| `semantic_classifier_api_key` | `""` | Bearer token for the classifier endpoint. If omitted or empty, the plugin checks `CODEX_PROXY_API_KEY`, then `OPENAI_API_KEY`; if no key is available, it sends no `Authorization` header. Do not commit real keys. |
+| `semantic_classifier_timeout_seconds` | `8` | HTTP timeout for the classifier call. Values below 1 are clamped to 1 second. |
+| `semantic_classifier_min_confidence` | `0.75` | Minimum classifier confidence required before a semantic result is accepted. Lower-confidence results fall back to deterministic routing. |
+| `semantic_classifier_max_chars` | `1200` | Maximum normalized message length eligible for semantic classification. Longer messages skip the classifier. |
+
+### Configuration examples
+
+Minimal deterministic router:
+
+```yaml
+enabled: true
+default: medium
+min: none
+max: high
+log_decisions: true
+decision_log: false
+low_char_limit: 80
+xhigh_high_match_threshold: 4
+pending_intent_enabled: true
+```
+
+Persistent audit trail for tuning:
+
+```yaml
+decision_log: true
+decision_log_path: logs/reasoning-router.jsonl
+log_decisions: true
+```
+
+Conservative semantic classifier via local OpenAI-compatible proxy:
+
+```yaml
+semantic_classifier_enabled: true
+semantic_classifier_url: http://127.0.0.1:8080/v1/chat/completions
+semantic_classifier_model: gpt-5.4-mini
+# Export CODEX_PROXY_API_KEY instead of storing the key here:
+#   export CODEX_PROXY_API_KEY='...'
+semantic_classifier_timeout_seconds: 3
+semantic_classifier_min_confidence: 0.85
+semantic_classifier_max_chars: 600
+```
+
+More permissive semantic classifier for shadow testing on ambiguous short commands:
+
+```yaml
+semantic_classifier_enabled: true
+semantic_classifier_timeout_seconds: 8
+semantic_classifier_min_confidence: 0.70
+semantic_classifier_max_chars: 1200
+```
+
+Hard cap the router so it never requests `xhigh`:
+
+```yaml
+min: none
+max: high
+```
 
 ## Activate
 
@@ -222,6 +300,37 @@ When `decision_log: true`, the plugin writes JSONL rows to:
 
 Each row includes timestamp, platform, user/chat/thread IDs, session key, selected effort, routing reason, and a short message preview. Pending-intent approvals include the inherited pending effort and previews of the pending task.
 
+## Live semantic classifier
+
+The live semantic classifier is optional and disabled by default. It posts a chat-completions request to `semantic_classifier_url` with:
+
+```json
+{
+  "model": "gpt-5.4-mini",
+  "messages": [
+    {"role": "system", "content": "...routing instructions..."},
+    {"role": "user", "content": "{...current_user_message/context JSON...}"}
+  ],
+  "max_tokens": 220,
+  "temperature": 0
+}
+```
+
+The classifier should return JSON in the assistant message content:
+
+```json
+{
+  "effort": "medium",
+  "confidence": 0.92,
+  "risk_categories": ["config_change"],
+  "reason": "Terse request likely refers to applying a setting from recent context."
+}
+```
+
+Accepted `effort` values are `none`, `low`, `medium`, `high`, and `xhigh`; `minimal` is accepted but normalized to `low`. Results with invalid effort, invalid JSON, missing content, HTTP errors, timeouts, or confidence below `semantic_classifier_min_confidence` are ignored and the router falls back to deterministic classification.
+
+The classifier receives only compact routing context: the current user message, the last assistant intent when available, an optional pending action string, and up to three recent user/assistant messages read from Hermes `state.db`. That context is for resolving terse approvals and deictic references, not for solving the request.
+
 ### Offline MiniLM evaluator POC
 
 `scripts/minilm_router_eval.py` is a read-only evaluator for the persistent JSONL log. It embeds historical message previews, runs leave-one-out nearest-neighbor effort prediction, and reports accuracy, confusion, and conflicted examples. It is a shadow-analysis tool only; it does not affect live routing.
@@ -276,4 +385,5 @@ Important constraints:
 - Discord is the only currently supported chat surface.
 - Cron jobs do not pass through the Discord gateway dispatch hook and therefore do not use this router.
 - The plugin depends on Hermes gateway internals for session reasoning overrides. It guards those calls and fails open, but future Hermes changes could require a small compatibility update.
-- The classifier is deterministic and intentionally inspectable; it is not an LLM judge.
+- The default classifier is deterministic and intentionally inspectable; it is not an LLM judge.
+- The optional semantic classifier is a bounded ambiguity resolver, not the primary router. Keep it behind a local/protected endpoint and avoid storing real API keys in `config.yaml`.
