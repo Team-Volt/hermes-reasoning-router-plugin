@@ -32,6 +32,9 @@ DEFAULT_CONFIG = {
     "default": "medium",
     "min": "none",
     "max": "xhigh",
+    # Chat surfaces the router is allowed to affect. Unsupported platforms fail
+    # open without mutating session reasoning.
+    "enabled_platforms": ["discord", "telegram"],
     # systemd/journald logging through the normal Hermes gateway logger
     "log_decisions": True,
     # persistent JSONL audit trail for later inspection or external audits
@@ -251,6 +254,10 @@ def pre_gateway_dispatch(event=None, gateway=None, session_store=None, **_kwargs
 
     config = _router_config(gateway)
     if not _truthy(config.get("enabled", True)):
+        return {"action": "allow"}
+
+    if not _platform_enabled(event, config):
+        logger.debug("reasoning-router: platform not enabled; allowing without override")
         return {"action": "allow"}
 
     session_key = _session_key_for(event, gateway, session_store)
@@ -1096,6 +1103,32 @@ def _truthy(value: Any) -> bool:
     if isinstance(value, str):
         return value.strip().lower() in {"1", "true", "yes", "on", "enabled"}
     return bool(value)
+
+
+def _platform_name(event) -> str:
+    source = getattr(event, "source", None)
+    platform = getattr(source, "platform", None)
+    value = getattr(platform, "value", platform)
+    return str(value or "").strip().lower()
+
+
+def _enabled_platform_names(config: dict[str, Any]) -> set[str]:
+    raw = config.get("enabled_platforms", DEFAULT_CONFIG["enabled_platforms"])
+    if isinstance(raw, str):
+        values = re.split(r"[,\s]+", raw)
+    elif isinstance(raw, Iterable):
+        values = raw
+    else:
+        values = DEFAULT_CONFIG["enabled_platforms"]
+    return {str(value).strip().lower() for value in values if str(value).strip()}
+
+
+def _platform_enabled(event, config: dict[str, Any]) -> bool:
+    platform = _platform_name(event)
+    if not platform:
+        return False
+    enabled = _enabled_platform_names(config)
+    return "*" in enabled or "all" in enabled or platform in enabled
 
 
 def _safe_int(value: Any, default: int) -> int:
