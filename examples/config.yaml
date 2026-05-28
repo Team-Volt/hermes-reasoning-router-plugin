@@ -1,13 +1,15 @@
 # Example standalone config for reasoning-router.
 # Install at: ~/.hermes/reasoning-router/config.yaml
 
+# Master switch. When false, messages pass through without changing reasoning.
 enabled: true
 
-# Fallback when no heuristic strongly matches.
+# Fallback when no deterministic rule or accepted semantic result strongly matches.
+# Valid efforts: none, minimal, low, medium, high, xhigh.
 default: medium
 
 # Clamp all routing decisions into this range.
-min: low
+min: none
 max: xhigh
 
 # Emit concise routing decisions into the Hermes gateway journal.
@@ -26,3 +28,15 @@ xhigh_high_match_threshold: 4
 # Carry task complexity across short approvals like "yes" or "go ahead".
 pending_intent_enabled: true
 pending_intent_ttl_minutes: 30
+
+# Optional OpenAI-compatible semantic classifier for ambiguous cases only.
+# Disabled by default; deterministic guardrails still win when enabled.
+semantic_classifier_enabled: false
+semantic_classifier_url: http://127.0.0.1:8080/v1/chat/completions
+semantic_classifier_model: gpt-5.4-mini
+# Prefer CODEX_PROXY_API_KEY or OPENAI_API_KEY in the gateway environment over
+# storing a key here. Leave empty to use env vars, or omit the field entirely.
+semantic_classifier_api_key: ""
+semantic_classifier_timeout_seconds: 8
+semantic_classifier_min_confidence: 0.75
+semantic_classifier_max_chars: 1200

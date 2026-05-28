@@ -30,7 +30,7 @@ EFFORT_ORDER = ("none", "minimal", "low", "medium", "high", "xhigh")
 DEFAULT_CONFIG = {
     "enabled": True,
     "default": "medium",
-    "min": "low",
+    "min": "none",
     "max": "xhigh",
     # systemd/journald logging through the normal Hermes gateway logger
     "log_decisions": True,
@@ -60,7 +60,7 @@ _XHIGH_PATTERNS = (
     r"\b(be\s+thorough|flesh\s+out|boil\s+the\s+ocean|do\s+the\s+whole\s+thing|end\s+to\s+end)\b",
     r"\b(architecture|architectural|design\s+decision|tradeoff|strategy|migration\s+plan)\b",
     r"\b(security|auth|oauth|credential|secret|permission|token|ssrf|injection)\b",
-    r"\b(production|rollback\s+safety|rollback-safe|data\s+loss|incident|outage)\b",
+    r"\b(?:production\s+(?:system|service|deploy|deployment|incident|outage)|prod\s+(?:deploy|deployment|incident|outage)|rollback\s+safety|rollback-safe|data\s+loss|incident|outage)\b",
     r"\b(?:back\s*up|backup|rollback|restore)\b.{0,200}\b(?:all\s+of\s+them|all\s+(?:current\s+)?skills?|all\s+(?:files?|docs?|references?|pages?)|every|entire|whole|bulk)\b.{0,200}\b(?:remove|delete|scrub|purge|strip)\b",
     r"\b(?:all\s+of\s+them|all\s+(?:current\s+)?skills?|all\s+(?:files?|docs?|references?|pages?)|every|entire|whole|bulk|back\s*up|backup|rollback|restore)\b.{0,200}\b(?:remove|delete|scrub|purge|strip)\b.{0,120}\b(?:any|all|every)\s+(?:mention|mentions|reference|references|occurrence|occurrences)\b",
     r"\b(?:shut\s*down|shutdown|stop|disable|restart)\b.{0,120}\b(?:mcp|gateway|daemon|systemd|service|container|docker|postgres|redis|api|worker|server)\b",
@@ -81,7 +81,7 @@ _DOCS_POLISH_PATTERNS = (
 
 _DOCS_POLISH_RISK_PATTERNS = (
     r"\b(security|auth|oauth|credential|secret|permission|token|ssrf|injection)\b",
-    r"\b(production|deploy|deployment|rollback\s+safety|rollback-safe|data\s+loss|incident|outage)\b",
+    r"\b(?:production\s+(?:system|service|deploy|deployment|incident|outage)|prod\s+(?:deploy|deployment|incident|outage)|deploy|deployment|rollback\s+safety|rollback-safe|data\s+loss|incident|outage)\b",
     r"\b(multi[-\s]?system|cross[-\s]?system|multiple\s+systems|orchestrat(?:e|ion))\b",
 )
 
@@ -113,7 +113,11 @@ _HIGH_PATTERN_GROUPS = {
         r"\b(gateway|transport|provider|reasoning|request\s*parameter|session\s+override|pre_gateway_dispatch)\b",
     ),
     "ops": (
-        r"\b(systemd|service|restart|deploy|auth|oauth|credential|production)\b",
+        r"\b(systemd|service|restart|deploy|auth|oauth|credential|production\s+(?:system|service|deploy|deployment|incident|outage))\b",
+    ),
+    "real_world_device_schedule": (
+        r"\b(?:turn\s+on|turn\s+off|start|stop|open|close|lock|unlock|set)\b.{0,160}\b(?:pump|pool|heater|chlorinator|salt\s+generator|lights?|switch|fan|sprinkler|valve|cover|door|garage|lock|thermostat|climate)\b.{0,160}\b(?:in\s+\d+|after\s+\d+|for\s+\d+|again|schedule|timer|later|at\s+\d{1,2})\b",
+        r"\b(?:pump|pool|heater|chlorinator|salt\s+generator|lights?|switch|fan|sprinkler|valve|cover|door|garage|lock|thermostat|climate)\b.{0,160}\b(?:turn\s+on|turn\s+off|start|stop|open|close|lock|unlock|set)\b.{0,160}\b(?:in\s+\d+|after\s+\d+|for\s+\d+|again|schedule|timer|later|at\s+\d{1,2})\b",
     ),
     "destructive": (
         r"\b(delete|remove|purge|destructive|irreversible|data\s+loss)\b",
@@ -150,6 +154,11 @@ _MEDIUM_OPINION_PATTERNS = (
     r"\b(?:honest\s+opinion|your\s+opinion|what\s+do\s+you\s+think|your\s+take|thoughts\s+on|is\s+there\s+(?:actually\s+)?value\s+in)\b",
 )
 
+_NONE_PATTERNS = (
+    r"^(?:lol|haha|lmao|heh|thanks|thank\s+you|ok|okay|cool|nice)[.!?\s]*$",
+    r"^(?:what\s+time\s+is\s+it|what\s+date\s+is\s+it|what'?s\s+(?:today'?s\s+)?date)[?!.\s]*$",
+)
+
 _LOW_PATTERNS = (
     r"^(?:lol|haha|lmao|heh)?\s*(thanks|thank you|ok|okay|yes|no|yep|nope|cool|nice)[.!?\s]*$",
     r"\b(what\s+time|what\s+date|who\s+is|what\s+is)\b",
@@ -175,6 +184,7 @@ _COMPILED_MEDIUM_TECH_FOLLOWUP = tuple(
 _COMPILED_MEDIUM_OPINION = tuple(
     re.compile(pattern, re.I) for pattern in _MEDIUM_OPINION_PATTERNS
 )
+_COMPILED_NONE = tuple(re.compile(pattern, re.I) for pattern in _NONE_PATTERNS)
 _COMPILED_LOW = tuple(re.compile(pattern, re.I) for pattern in _LOW_PATTERNS)
 _AFFIRMATIVE_PATTERNS = tuple(
     re.compile(pattern, re.I)
@@ -507,6 +517,9 @@ def classify_message(text: str, config: dict[str, Any] | None = None) -> tuple[s
     if _is_explicit_config_snippet_request(text):
         return _clamp_effort("medium", cfg), "matched explicit config snippet request"
 
+    if _matches(_COMPILED_NONE, lowered):
+        return _clamp_effort("none", cfg), "matched no-op/simple time-date request"
+
     semantic_route = _semantic_route_for_ambiguous_message(text, lowered, cfg)
     if semantic_route is not None:
         return semantic_route
@@ -609,7 +622,7 @@ def _normalize_semantic_classifier_result(result: Any) -> dict[str, Any] | None:
     effort = str(result.get("effort") or "").lower()
     if effort not in EFFORT_ORDER:
         return None
-    if effort in {"none", "minimal"}:
+    if effort == "minimal":
         effort = "low"
 
     try:
@@ -654,13 +667,14 @@ def _semantic_classifier_messages(
     }
     system = (
         "You are a routing classifier. Return JSON only. "
-        "Classify the user request into exactly one effort: low, medium, high, xhigh. "
+        "Classify the user request into exactly one effort: none, low, medium, high, xhigh. "
         "Use last_assistant_intent and recent_messages only to resolve terse approvals, deictic references, and pending action scope. "
         "Treat terse deictic imperatives that ask to set, change, apply, use, or do this/that/it as medium unless they are clearly casual chatter. "
-        "low: trivial thanks/status/simple factual reply. "
+        "none: pure acknowledgements, thanks, laughter, casual comments, or simple time/date questions that require no judgment, no memory, no action planning, and no side effects. "
+        "low: simple factual/status replies with minimal judgment and no meaningful risk. "
         "medium: explanation, research, inspection, simple reversible action, or one setting value change. "
-        "high: coding, config changes with files/tests, debugging, verification-heavy work, or GitHub workflow. "
-        "xhigh: architecture, multi-system changes, migrations, auth/security/secrets, destructive or rollback-sensitive actions, service restarts, deploys. "
+        "high: coding, config changes with files/tests, debugging, verification-heavy work, GitHub workflow, or real-world device actions with scheduling/follow-up. "
+        "xhigh: architecture, multi-system changes, migrations, auth/security/secrets, destructive or rollback-sensitive actions, service restarts, deploys, or production-system incidents. "
         "Return keys: effort, confidence, risk_categories, reason. "
         "confidence must be a number from 0 to 1. Do not solve the request."
     )
@@ -706,12 +720,13 @@ def _is_question_or_clarification(lowered: str) -> bool:
 def _semantic_classify_with_codex_proxy(text: str, config: dict[str, Any]) -> dict[str, Any] | None:
     url = str(config.get("semantic_classifier_url") or DEFAULT_CONFIG["semantic_classifier_url"])
     model = str(config.get("semantic_classifier_model") or DEFAULT_CONFIG["semantic_classifier_model"])
+    configured_api_key = str(config.get("semantic_classifier_api_key") or "").strip()
     api_key = str(
-        config.get("semantic_classifier_api_key")
+        configured_api_key
         or os.environ.get("CODEX_PROXY_API_KEY")
         or os.environ.get("OPENAI_API_KEY")
         or DEFAULT_CONFIG["semantic_classifier_api_key"]
-    )
+    ).strip()
     timeout = max(
         1,
         _safe_int(
@@ -725,13 +740,13 @@ def _semantic_classify_with_codex_proxy(text: str, config: dict[str, Any]) -> di
         "max_tokens": 220,
         "temperature": 0,
     }
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
     request = urllib.request.Request(
         url,
         data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
+        headers=headers,
         method="POST",
     )
     with urllib.request.urlopen(request, timeout=timeout) as response:

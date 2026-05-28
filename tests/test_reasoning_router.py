@@ -72,7 +72,7 @@ def event(text: str):
     return SimpleNamespace(text=text, source=source, internal=False)
 
 
-def test_quick_question_routes_low():
+def test_quick_time_question_routes_none():
     plugin = load_plugin()
     gateway = FakeGateway({"reasoning_router": {"enabled": True}})
 
@@ -82,7 +82,7 @@ def test_quick_question_routes_low():
     assert gateway.calls == [
         (
             "discord:user-1:chat-1:thread-1",
-            {"enabled": True, "effort": "low"},
+            {"enabled": False},
         )
     ]
 
@@ -291,10 +291,59 @@ def test_security_docs_wording_can_still_route_xhigh():
     assert "xhigh" in reason
 
 
+def test_tiny_noop_comments_can_route_none_when_min_allows_none():
+    plugin = load_plugin()
+
+    for text in ("thanks", "ok", "lol", "nice"):
+        effort, reason = plugin.classify_message(text, {"min": "none"})
+        assert effort == "none"
+        assert "no-op" in reason
+
+
+def test_time_and_date_questions_can_route_none_when_min_allows_none():
+    plugin = load_plugin()
+
+    for text in ("what time is it?", "what date is it?"):
+        effort, reason = plugin.classify_message(text, {"min": "none"})
+        assert effort == "none"
+        assert "no-op" in reason
+
+
+def test_min_low_still_clamps_none_to_low_for_compatibility():
+    plugin = load_plugin()
+
+    effort, reason = plugin.classify_message("what time is it?", {"min": "low"})
+
+    assert effort == "low"
+    assert "no-op" in reason
+
+
+def test_chlorine_production_efficiency_does_not_match_production_system_risk():
+    plugin = load_plugin()
+
+    effort, reason = plugin.classify_message(
+        "I'm looking for not only power efficiency but also general pool and chlorine production efficiency"
+    )
+
+    assert effort == "medium"
+    assert "xhigh" not in reason
+
+
+def test_scheduled_real_world_device_action_routes_high():
+    plugin = load_plugin()
+
+    effort, reason = plugin.classify_message(
+        'Turn on "pump 2000" on the pool, and turn it off again in 3 hours'
+    )
+
+    assert effort == "high"
+    assert "real_world_device_schedule" in reason
+
+
 def test_short_ordinary_question_still_routes_low():
     plugin = load_plugin()
 
-    effort, reason = plugin.classify_message("what time is it?")
+    effort, reason = plugin.classify_message("who is Alan Turing?")
 
     assert effort == "low"
     assert "quick" in reason
@@ -615,6 +664,129 @@ def test_semantic_classifier_prompt_is_minimal_and_json_only():
     assert "apply a config change" in serialized
 
 
+def test_semantic_classifier_empty_key_prefers_environment_key(monkeypatch):
+    plugin = load_plugin()
+    captured = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return json.dumps(
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {
+                                        "effort": "medium",
+                                        "confidence": 0.95,
+                                        "risk_categories": [],
+                                        "reason": "ok",
+                                    }
+                                )
+                            }
+                        }
+                    ]
+                }
+            ).encode("utf-8")
+
+    def fake_urlopen(request, timeout):
+        captured["authorization"] = request.get_header("Authorization")
+        captured["timeout"] = timeout
+        return FakeResponse()
+
+    monkeypatch.setenv("CODEX_PROXY_API_KEY", "env-test-key")
+    monkeypatch.setattr(plugin.urllib.request, "urlopen", fake_urlopen)
+
+    result = plugin._semantic_classify_with_codex_proxy(
+        "Set this one please",
+        {
+            "semantic_classifier_url": "http://127.0.0.1:8080/v1/chat/completions",
+            "semantic_classifier_model": "gpt-5.4-mini",
+            "semantic_classifier_api_key": "",
+            "semantic_classifier_timeout_seconds": 8,
+        },
+    )
+
+    assert result["effort"] == "medium"
+    assert captured["authorization"] == "Bearer env-test-key"
+    assert captured["timeout"] == 8
+
+
+def test_semantic_classifier_explicit_api_key_overrides_environment(monkeypatch):
+    plugin = load_plugin()
+    captured = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return b'{"choices":[{"message":{"content":"{\\"effort\\":\\"low\\",\\"confidence\\":0.9}"}}]}'
+
+    def fake_urlopen(request, timeout):
+        captured["authorization"] = request.get_header("Authorization")
+        return FakeResponse()
+
+    monkeypatch.setenv("CODEX_PROXY_API_KEY", "env-test-key")
+    monkeypatch.setattr(plugin.urllib.request, "urlopen", fake_urlopen)
+
+    plugin._semantic_classify_with_codex_proxy(
+        "who is Alan Turing?",
+        {
+            "semantic_classifier_url": "http://127.0.0.1:8080/v1/chat/completions",
+            "semantic_classifier_model": "gpt-5.4-mini",
+            "semantic_classifier_api_key": "explicit-test-key",
+            "semantic_classifier_timeout_seconds": 8,
+        },
+    )
+
+    assert captured["authorization"] == "Bearer explicit-test-key"
+
+
+def test_semantic_classifier_omits_authorization_header_without_key(monkeypatch):
+    plugin = load_plugin()
+    captured = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return b'{"choices":[{"message":{"content":"{\\"effort\\":\\"low\\",\\"confidence\\":0.9}"}}]}'
+
+    def fake_urlopen(request, timeout):
+        captured["authorization"] = request.get_header("Authorization")
+        return FakeResponse()
+
+    monkeypatch.delenv("CODEX_PROXY_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setattr(plugin.urllib.request, "urlopen", fake_urlopen)
+
+    plugin._semantic_classify_with_codex_proxy(
+        "who is Ada Lovelace?",
+        {
+            "semantic_classifier_url": "http://127.0.0.1:8080/v1/chat/completions",
+            "semantic_classifier_model": "gpt-5.4-mini",
+            "semantic_classifier_api_key": "",
+            "semantic_classifier_timeout_seconds": 8,
+        },
+    )
+
+    assert captured["authorization"] is None
+
+
 def test_disabled_router_does_nothing():
     plugin = load_plugin()
     gateway = FakeGateway({"reasoning_router": {"enabled": False}})
@@ -862,7 +1034,7 @@ def test_substantive_new_request_clears_pending_intent():
     )
 
     plugin.pre_gateway_dispatch(event("what time is it?"), gateway=gateway, session_store=store)
-    assert gateway.calls[-1] == (session_key, {"enabled": True, "effort": "low"})
+    assert gateway.calls[-1] == (session_key, {"enabled": False})
 
     gateway.calls.clear()
     plugin.pre_gateway_dispatch(event("yes"), gateway=gateway, session_store=store)
