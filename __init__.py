@@ -237,33 +237,34 @@ def pre_gateway_dispatch(event=None, gateway=None, session_store=None, **_kwargs
     reasoning override before normal dispatch continues.
     """
     if event is None or gateway is None:
-        return {"action": "allow"}
+        return None
 
     if bool(getattr(event, "internal", False)):
-        return {"action": "allow"}
+        return None
 
     text = str(getattr(event, "text", "") or "")
     if not text.strip():
-        return {"action": "allow"}
+        return None
 
     # Built-in/plugin slash commands should keep their own semantics. In
     # particular, /reasoning must be able to set manual state without us racing
     # it from the pre-dispatch hook.
     if text.lstrip().startswith("/"):
-        return {"action": "allow"}
+        _consume_pending_intent_for_event(event, gateway, session_store)
+        return None
 
     config = _router_config(gateway)
     if not _truthy(config.get("enabled", True)):
-        return {"action": "allow"}
+        return None
 
     if not _platform_enabled(event, config):
         logger.debug("reasoning-router: platform not enabled; allowing without override")
-        return {"action": "allow"}
+        return None
 
     session_key = _session_key_for(event, gateway, session_store)
     if not session_key:
         logger.debug("reasoning-router: no session key; allowing without override")
-        return {"action": "allow"}
+        return None
 
     effort, reason, pending_intent = _effective_effort_for_message(
         text,
@@ -273,7 +274,11 @@ def pre_gateway_dispatch(event=None, gateway=None, session_store=None, **_kwargs
     )
     reasoning_config = _reasoning_config_for_effort(effort)
 
-    _set_reasoning_override(gateway, session_key, reasoning_config)
+    try:
+        _set_reasoning_override(gateway, session_key, reasoning_config)
+    except Exception as exc:
+        logger.warning("reasoning-router: failed to set session reasoning override: %s", exc)
+        return None
     decision = _record_decision(
         gateway,
         session_key,
@@ -295,7 +300,7 @@ def pre_gateway_dispatch(event=None, gateway=None, session_store=None, **_kwargs
     if _truthy(config.get("decision_log", False)):
         _append_decision_log(config, decision)
 
-    return {"action": "allow"}
+    return None
 
 
 def post_llm_call(
@@ -457,9 +462,15 @@ def classify_message(text: str, config: dict[str, Any] | None = None) -> tuple[s
         return _clamp_effort("medium", cfg), "documentation wording/install-prompt polish"
 
     # Strongest wins. Avoid low-routing a short sentence like "go ahead and set
-    # up the automation" just because it is brief. Question/clarification forms
-    # get one semantic pass so words like "restart gateway" do not over-route
-    # when the user is only asking whether a restart is needed.
+    # up the automation" just because it is brief. Definition-style questions
+    # get a cheap factual route before risk keywords so "what is OAuth?" does
+    # not look like an auth migration.
+    if _is_simple_factual_question(lowered):
+        return _clamp_effort("low", cfg), "simple factual question"
+
+    # Question/clarification forms get one semantic pass so words like
+    # "restart gateway" do not over-route when the user is only asking whether a
+    # restart is needed.
     if _matches(_COMPILED_XHIGH, lowered):
         if _is_question_or_clarification(lowered):
             semantic_route = _semantic_route_for_ambiguous_message(
@@ -588,12 +599,11 @@ def _semantic_route_for_ambiguous_message(
 
     effort = str(parsed.get("effort") or "").lower()
     confidence = float(parsed.get("confidence") or 0.0)
-    min_confidence = float(
-        config.get(
-            "semantic_classifier_min_confidence",
-            DEFAULT_CONFIG["semantic_classifier_min_confidence"],
-        )
+    min_confidence = _safe_float(
+        config.get("semantic_classifier_min_confidence"),
+        DEFAULT_CONFIG["semantic_classifier_min_confidence"],
     )
+    min_confidence = max(0.0, min(1.0, min_confidence))
     if confidence < min_confidence:
         return None
 
@@ -813,12 +823,11 @@ def _effective_effort_for_message(
         pending_reason = str(pending.get("reason") or "pending task")
         return routed, f"affirmed pending task ({inherited}): {pending_reason}", pending
 
-    # A real new request means the approval question went stale. Drop it so a
-    # later bare "yes" cannot accidentally execute old context.
-    if _is_substantive_new_request(text):
-        _consume_pending_intent(session_id)
-
-    return effort, reason, None
+    # Pending intents are one-shot. Any non-empty user turn that is not the
+    # affirmative consumes the pending task so a later bare "yes" cannot inherit
+    # stale context.
+    _consume_pending_intent(session_id)
+    return effort, f"cleared pending task; {reason}", pending
 
 
 def _recent_messages_for_session(session_id: str, limit: int = 3) -> list[dict[str, str]]:
@@ -857,7 +866,7 @@ def _recent_messages_for_session(session_id: str, limit: int = 3) -> list[dict[s
 
 
 def _max_effort(efforts: Iterable[str], config: dict[str, Any]) -> str:
-    best = DEFAULT_CONFIG["default"]
+    best = "none"
     best_idx = EFFORT_ORDER.index(best)
     for effort in efforts:
         effort = str(effort or "").lower()
@@ -891,15 +900,6 @@ def _is_rejection(text: str) -> bool:
     if not normalized:
         return False
     return _matches(_REJECTION_PATTERNS, normalized)
-
-
-def _is_substantive_new_request(text: str) -> bool:
-    normalized = " ".join(str(text or "").strip().split())
-    if not normalized:
-        return False
-    if _is_affirmative(normalized) or _is_rejection(normalized):
-        return False
-    return len(normalized) > 12 or bool(re.search(r"\b(?:what|why|how|when|where|who|patch|run|check|set|create|build|implement|fix|show|list|find)\b", normalized, re.I))
 
 
 def _session_id_for_key(session_store, session_key: str) -> str:
@@ -942,10 +942,30 @@ def _active_pending_intent(session_id: str, config: dict[str, Any]) -> dict[str,
     return pending
 
 
+def _consume_pending_intent_for_event(event, gateway, session_store=None) -> None:
+    session_key = _session_key_for(event, gateway, session_store)
+    if not session_key:
+        return
+    session_id = _session_id_for_key(session_store, session_key)
+    if session_id:
+        _consume_pending_intent(session_id)
+
+
 def _consume_pending_intent(session_id: str) -> None:
     pending = _PENDING_INTENTS.pop(session_id, None)
     if pending is not None:
         pending["consumed"] = True
+
+
+def _is_simple_factual_question(lowered: str) -> bool:
+    text = str(lowered or "").strip()
+    if not text:
+        return False
+    if not re.match(r"^(?:what|who|when|where)\s+(?:is|are|was|were)\b", text):
+        return False
+    if re.search(r"\b(?:fix|debug|implement|build|change|modify|configure|deploy|restart|delete|remove|migrate|patch|update|review|audit|secure|rotate)\b", text):
+        return False
+    return len(text) <= 120
 
 
 def _preview(text: str, limit: int = 160) -> str:
@@ -1020,11 +1040,6 @@ def _main_config_path() -> Path:
 def _config_path() -> Path:
     return _hermes_home() / "reasoning-router" / "config.yaml"
 
-
-def _plugin_config_path() -> Path:
-    return _config_path()
-
-
 def _legacy_plugin_config_path() -> Path:
     return _main_config_path().parent / "plugins" / "reasoning-router" / "config.yaml"
 
@@ -1054,7 +1069,7 @@ def _read_legacy_router_config() -> dict[str, Any]:
     return router if isinstance(router, dict) else {}
 
 
-def _read_router_config_from_disk() -> dict[str, Any]:
+def _read_router_config_from_disk(*, include_runtime_override: bool = True) -> dict[str, Any]:
     config_path = _config_path()
     router = _read_full_config()
     if not config_path.exists():
@@ -1064,7 +1079,7 @@ def _read_router_config_from_disk() -> dict[str, Any]:
         if legacy:
             router = legacy
     cfg = {**DEFAULT_CONFIG, **router}
-    if isinstance(_RUNTIME_CONFIG_OVERRIDE, dict):
+    if include_runtime_override and isinstance(_RUNTIME_CONFIG_OVERRIDE, dict):
         cfg.update(_RUNTIME_CONFIG_OVERRIDE)
     return cfg
 
@@ -1075,13 +1090,12 @@ def _update_router_config(updates: dict[str, Any]) -> None:
         raise RuntimeError("PyYAML is required to update reasoning-router config")
 
     path = _config_path()
-    data = _read_router_config_from_disk()
+    data = _read_router_config_from_disk(include_runtime_override=False)
     data.update(updates)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml.safe_dump(data, sort_keys=False))
 
-    current = {**data, **updates}
-    _RUNTIME_CONFIG_OVERRIDE = current
+    _RUNTIME_CONFIG_OVERRIDE = None
 
 
 def _format_status(config: dict[str, Any]) -> str:
@@ -1134,6 +1148,12 @@ def _platform_enabled(event, config: dict[str, Any]) -> bool:
 def _safe_int(value: Any, default: int) -> int:
     try:
         return int(value)
+    except Exception:
+        return default
+
+def _safe_float(value: Any, default: float) -> float:
+    try:
+        return float(value)
     except Exception:
         return default
 
@@ -1213,7 +1233,7 @@ def _record_decision(
     pending_intent: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     source = getattr(event, "source", None)
-    platform = getattr(getattr(source, "platform", None), "value", None)
+    platform = _platform_name(event)
     decision = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "session_key": session_key,

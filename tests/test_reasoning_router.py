@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sqlite3
+import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -85,7 +86,7 @@ def test_quick_time_question_routes_none():
 
     result = plugin.pre_gateway_dispatch(event("what time is it?"), gateway=gateway)
 
-    assert result == {"action": "allow"}
+    assert result is None
     assert gateway.calls == [
         (
             "discord:user-1:chat-1:thread-1",
@@ -103,7 +104,7 @@ def test_simple_code_change_routes_high():
         gateway=gateway,
     )
 
-    assert result == {"action": "allow"}
+    assert result is None
     assert gateway.calls == [
         (
             "discord:user-1:chat-1:thread-1",
@@ -126,7 +127,7 @@ def test_telegram_message_routes_with_gateway_session_key():
         gateway=gateway,
     )
 
-    assert result == {"action": "allow"}
+    assert result is None
     assert gateway.calls == [
         (
             "telegram:user-1:tg-chat-1:topic-42",
@@ -144,6 +145,57 @@ def test_default_enabled_platforms_include_discord_and_telegram():
 
     assert plugin.DEFAULT_CONFIG["enabled_platforms"] == ["discord", "telegram"]
 
+def test_metadata_descriptions_cover_discord_and_telegram():
+    plugin_metadata = yaml.safe_load((PLUGIN_ROOT / "plugin.yaml").read_text())
+    project_metadata = tomllib.loads((PLUGIN_ROOT / "pyproject.toml").read_text())
+
+    descriptions = [
+        plugin_metadata["description"],
+        project_metadata["project"]["description"],
+    ]
+    for description in descriptions:
+        assert "Discord" in description
+        assert "Telegram" in description
+
+
+def test_string_platform_is_recorded_in_decisions():
+    plugin = load_plugin()
+    session_key = "discord:user-1:chat-1:"
+    source = SimpleNamespace(
+        platform="discord",
+        user_id="user-1",
+        chat_id="chat-1",
+        thread_id=None,
+    )
+    string_platform_event = SimpleNamespace(
+        text="Patch the Discord gateway handling and run tests",
+        source=source,
+        internal=False,
+    )
+
+    class Gateway:
+        config_data = {"reasoning_router": {"enabled": True}}
+
+        def __init__(self):
+            self._session_reasoning_overrides = {}
+
+    class Store:
+        def _generate_session_key(self, event_source):
+            return f"{event_source.platform}:{event_source.user_id}:{event_source.chat_id}:"
+
+    gateway = Gateway()
+
+    result = plugin.pre_gateway_dispatch(
+        string_platform_event,
+        gateway=gateway,
+        session_store=Store(),
+    )
+
+    assert result is None
+    assert gateway._session_reasoning_overrides[session_key] == {"enabled": True, "effort": "high"}
+    assert gateway._reasoning_router_decisions[session_key]["platform"] == "discord"
+
+
 
 def test_enabled_platforms_skips_platforms_outside_allowlist():
     plugin = load_plugin()
@@ -156,7 +208,7 @@ def test_enabled_platforms_skips_platforms_outside_allowlist():
         gateway=gateway,
     )
 
-    assert result == {"action": "allow"}
+    assert result is None
     assert gateway.calls == []
     assert not hasattr(gateway, "_reasoning_router_decisions")
 
@@ -170,7 +222,7 @@ def test_enabled_platforms_can_disable_telegram_without_breaking_dispatch():
         gateway=gateway,
     )
 
-    assert result == {"action": "allow"}
+    assert result is None
     assert gateway.calls == []
 
 
@@ -186,7 +238,7 @@ def test_complex_multi_system_work_routes_xhigh():
         gateway=gateway,
     )
 
-    assert result == {"action": "allow"}
+    assert result is None
     assert gateway.calls == [
         (
             "discord:user-1:chat-1:thread-1",
@@ -201,7 +253,7 @@ def test_slash_commands_are_left_alone():
 
     result = plugin.pre_gateway_dispatch(event("/reasoning high"), gateway=gateway)
 
-    assert result == {"action": "allow"}
+    assert result is None
     assert gateway.calls == []
 
 
@@ -216,13 +268,38 @@ def test_config_caps_effort():
         gateway=gateway,
     )
 
-    assert result == {"action": "allow"}
+    assert result is None
     assert gateway.calls == [
         (
             "discord:user-1:chat-1:thread-1",
             {"enabled": True, "effort": "medium"},
         )
     ]
+
+def test_max_effort_returns_highest_observed_effort_not_default():
+    plugin = load_plugin()
+
+    assert plugin._max_effort(("none", "minimal", "low"), plugin.DEFAULT_CONFIG) == "low"
+    assert plugin._max_effort(("minimal",), plugin.DEFAULT_CONFIG) == "minimal"
+
+
+def test_override_api_failure_fails_open_without_recording_decision():
+    plugin = load_plugin()
+
+    class RaisingGateway(FakeGateway):
+        def _set_session_reasoning_override(self, session_key, reasoning_config):
+            raise RuntimeError("gateway override store unavailable")
+
+    gateway = RaisingGateway({"reasoning_router": {"enabled": True}})
+
+    result = plugin.pre_gateway_dispatch(
+        event("Patch the gateway routing and run the focused tests"),
+        gateway=gateway,
+    )
+
+    assert result is None
+    assert not hasattr(gateway, "_reasoning_router_decisions")
+
 
 
 def test_default_config_allows_xhigh():
@@ -397,6 +474,21 @@ def test_chlorine_production_efficiency_does_not_match_production_system_risk():
     assert effort == "medium"
     assert "xhigh" not in reason
 
+def test_simple_factual_questions_with_risk_keywords_do_not_route_xhigh():
+    plugin = load_plugin()
+
+    cases = [
+        "What is OAuth?",
+        "What are production system outages?",
+        "Who is responsible for security tokens?",
+    ]
+
+    for text in cases:
+        effort, reason = plugin.classify_message(text)
+        assert effort == "low"
+        assert reason == "simple factual question"
+
+
 
 def test_scheduled_real_world_device_action_routes_high():
     plugin = load_plugin()
@@ -415,7 +507,7 @@ def test_short_ordinary_question_still_routes_low():
     effort, reason = plugin.classify_message("who is Alan Turing?")
 
     assert effort == "low"
-    assert "quick" in reason
+    assert reason == "simple factual question"
 
 
 def test_explicit_set_snippet_intro_routes_medium_not_low():
@@ -547,6 +639,28 @@ def test_semantic_classifier_low_confidence_falls_back(monkeypatch):
     assert effort == "low"
     assert "quick" in reason
 
+def test_semantic_classifier_invalid_min_confidence_uses_default_threshold(monkeypatch):
+    plugin = load_plugin()
+
+    def fake_semantic_classifier(text, config):
+        return {
+            "effort": "medium",
+            "confidence": 0.74,
+            "risk_categories": ["config_change"],
+            "reason": "below the default confidence threshold",
+        }
+
+    monkeypatch.setattr(plugin, "_semantic_classify_with_codex_proxy", fake_semantic_classifier)
+
+    effort, reason = plugin.classify_message(
+        "Set this one please",
+        {"semantic_classifier_enabled": True, "semantic_classifier_min_confidence": "not-a-float"},
+    )
+
+    assert effort == "low"
+    assert "quick" in reason
+
+
 
 def test_semantic_classifier_does_not_lower_or_call_for_obvious_xhigh(monkeypatch):
     plugin = load_plugin()
@@ -676,7 +790,7 @@ def test_gateway_path_supplies_recent_session_context(tmp_path, monkeypatch):
         session_store=store,
     )
 
-    assert result == {"action": "allow"}
+    assert result is None
     assert captured["text"] == "Set this one please"
     assert captured["recent_messages"] == [
         {"role": "user", "content": "Can old sessions be pruned automatically?"},
@@ -862,7 +976,7 @@ def test_disabled_router_does_nothing():
 
     result = plugin.pre_gateway_dispatch(event("Migrate the database schema"), gateway=gateway)
 
-    assert result == {"action": "allow"}
+    assert result is None
     assert gateway.calls == []
 
 
@@ -984,6 +1098,23 @@ def test_reasoning_router_command_updates_max_and_test_classifies(tmp_path, monk
     assert "would route to medium" in test_output
     assert "high" in test_output
 
+def test_runtime_command_override_does_not_shadow_later_disk_edit(tmp_path, monkeypatch):
+    plugin = load_plugin()
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    config_path = tmp_path / "reasoning-router" / "config.yaml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(yaml.safe_dump({"enabled": True, "max": "high"}))
+
+    output = plugin.reasoning_router_command("max medium")
+    assert output == "Reasoning router max effort set to medium."
+
+    config_data = yaml.safe_load(config_path.read_text())
+    config_data["max"] = "high"
+    config_path.write_text(yaml.safe_dump(config_data))
+
+    assert plugin._read_router_config_from_disk()["max"] == "high"
+
+
 
 def test_persistent_decision_log_jsonl(tmp_path, monkeypatch):
     plugin = load_plugin()
@@ -1002,7 +1133,7 @@ def test_persistent_decision_log_jsonl(tmp_path, monkeypatch):
         event("Design a rollback-safe migration plan for the auth gateway"), gateway=gateway
     )
 
-    assert result == {"action": "allow"}
+    assert result is None
     log_path = tmp_path / "logs" / "reasoning-router.jsonl"
     rows = [json.loads(line) for line in log_path.read_text().splitlines()]
     assert rows[-1]["session_key"] == "discord:user-1:chat-1:thread-1"
@@ -1029,7 +1160,7 @@ def test_pending_affirmation_inherits_prior_xhigh_intent():
 
     result = plugin.pre_gateway_dispatch(event("yes"), gateway=gateway, session_store=store)
 
-    assert result == {"action": "allow"}
+    assert result is None
     assert gateway.calls[-1] == (session_key, {"enabled": True, "effort": "xhigh"})
     assert gateway._reasoning_router_decisions[session_key]["message_preview"] == "yes"
     assert gateway._reasoning_router_decisions[session_key]["pending_task_preview"]
@@ -1060,7 +1191,7 @@ def test_next_step_approval_inherits_prior_xhigh_recommendation():
         event("Go ahead and do the next step"), gateway=gateway, session_store=store
     )
 
-    assert result == {"action": "allow"}
+    assert result is None
     assert gateway.calls[-1] == (session_key, {"enabled": True, "effort": "xhigh"})
     decision = gateway._reasoning_router_decisions[session_key]
     assert decision["message_preview"] == "Go ahead and do the next step"
@@ -1108,6 +1239,47 @@ def test_substantive_new_request_clears_pending_intent():
     gateway.calls.clear()
     plugin.pre_gateway_dispatch(event("yes"), gateway=gateway, session_store=store)
     assert gateway.calls[-1] == (session_key, {"enabled": True, "effort": "low"})
+
+def test_pending_intent_is_consumed_by_neutral_reply_and_slash_command():
+    plugin = load_plugin()
+    session_key = "discord:user-1:chat-1:thread-1"
+
+    cases = [
+        ("neutral", "thanks", {"enabled": False}),
+        ("slash", "/reasoning-router status", None),
+    ]
+
+    for name, first_reply, expected_first_override in cases:
+        gateway = FakeGateway({"reasoning_router": {"enabled": True}})
+        store = FakeSessionStore(session_key, f"session-{name}")
+        plugin.post_llm_call(
+            session_id=f"session-{name}",
+            user_message="Plan a production deployment and rollback-safe config migration.",
+            assistant_response="Want me to proceed with deploying the changes?",
+            platform="discord",
+        )
+
+        first_result = plugin.pre_gateway_dispatch(
+            event(first_reply),
+            gateway=gateway,
+            session_store=store,
+        )
+        assert first_result is None
+        if expected_first_override is None:
+            assert gateway.calls == []
+        else:
+            assert gateway.calls[-1] == (session_key, expected_first_override)
+
+        gateway.calls.clear()
+        second_result = plugin.pre_gateway_dispatch(
+            event("yes"),
+            gateway=gateway,
+            session_store=store,
+        )
+
+        assert second_result is None
+        assert gateway.calls[-1] == (session_key, {"enabled": True, "effort": "low"})
+
 
 
 def test_plain_answer_does_not_arm_pending_intent():
