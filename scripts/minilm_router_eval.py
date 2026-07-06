@@ -41,18 +41,6 @@ class Decision:
         self.timestamp = str(timestamp or "").strip()
         self.metadata = dict(metadata or {})
 
-    def preview(self, limit: int = 120) -> str:
-        text = " ".join(self.message.split())
-        return text if len(text) <= limit else text[: limit - 1] + "…"
-
-    def as_dict(self) -> dict[str, Any]:
-        return {
-            "message": self.message,
-            "effort": self.effort,
-            "reason": self.reason,
-            "timestamp": self.timestamp,
-            "metadata": self.metadata,
-        }
 
 
 Vector = Sequence[float]
