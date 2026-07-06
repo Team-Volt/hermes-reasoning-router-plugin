@@ -12,6 +12,10 @@ default: medium
 min: none
 max: xhigh
 
+# Classify and log decisions without mutating Hermes session reasoning.
+# Useful for tuning or new-platform rollout.
+shadow_mode: false
+
 # Gateway platforms the router may affect. Unsupported platforms pass through
 # without mutating session reasoning. Use all/* only after adapter verification.
 enabled_platforms:

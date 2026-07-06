@@ -1098,6 +1098,24 @@ def test_reasoning_router_command_updates_max_and_test_classifies(tmp_path, monk
     assert "would route to medium" in test_output
     assert "high" in test_output
 
+
+def test_reasoning_router_command_platforms_shows_and_writes_enabled_platforms(tmp_path, monkeypatch):
+    plugin = load_plugin()
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    assert plugin.reasoning_router_command("platforms") == (
+        "Reasoning router enabled platforms: discord, telegram"
+    )
+
+    output = plugin.reasoning_router_command("platforms discord,telegram,slack")
+    plugin_cfg = yaml.safe_load((tmp_path / "reasoning-router" / "config.yaml").read_text())
+
+    assert output == "Reasoning router enabled platforms set to: discord, telegram, slack."
+    assert plugin_cfg["enabled_platforms"] == ["discord", "telegram", "slack"]
+    assert plugin.reasoning_router_command("platforms") == (
+        "Reasoning router enabled platforms: discord, slack, telegram"
+    )
+
 def test_runtime_command_override_does_not_shadow_later_disk_edit(tmp_path, monkeypatch):
     plugin = load_plugin()
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
@@ -1123,6 +1141,7 @@ def test_persistent_decision_log_jsonl(tmp_path, monkeypatch):
         {
             "reasoning_router": {
                 "enabled": True,
+                "max": "high",
                 "decision_log": True,
                 "decision_log_path": "logs/reasoning-router.jsonl",
             }
@@ -1130,16 +1149,74 @@ def test_persistent_decision_log_jsonl(tmp_path, monkeypatch):
     )
 
     result = plugin.pre_gateway_dispatch(
-        event("Design a rollback-safe migration plan for the auth gateway"), gateway=gateway
+        event("Flesh out the gateway plugin config migration, add persistent JSONL logs, update tests, and restart service"),
+        gateway=gateway,
     )
 
     assert result is None
     log_path = tmp_path / "logs" / "reasoning-router.jsonl"
     rows = [json.loads(line) for line in log_path.read_text().splitlines()]
     assert rows[-1]["session_key"] == "discord:user-1:chat-1:thread-1"
-    assert rows[-1]["effort"] == "xhigh"
+    assert rows[-1]["effort"] == "high"
     assert rows[-1]["platform"] == "discord"
+    assert rows[-1]["route_source"] == "deterministic"
+    assert rows[-1]["route_detail"] == "high_groups"
+    assert set(rows[-1]["matched_groups"]) >= {
+        "implementation",
+        "setup_config",
+        "state_migration",
+        "hermes_internals",
+        "ops",
+        "verification",
+        "logging_audit",
+    }
+    assert rows[-1]["clamped_from"] == "xhigh"
+    assert rows[-1]["shadow_mode"] is False
+    assert rows[-1]["override_applied"] is True
     assert "message_preview" in rows[-1]
+
+
+def test_shadow_mode_logs_decision_without_applying_override_and_updates_health(tmp_path, monkeypatch):
+    plugin = load_plugin()
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    config_path = tmp_path / "reasoning-router" / "config.yaml"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "enabled": True,
+                "shadow_mode": True,
+                "enabled_platforms": ["discord", "telegram"],
+                "decision_log": True,
+                "decision_log_path": "logs/reasoning-router.jsonl",
+            }
+        )
+    )
+    gateway = FakeGateway()
+    session_key = "discord:user-1:chat-1:thread-1"
+
+    result = plugin.pre_gateway_dispatch(event("Patch the gateway plugin and run tests"), gateway=gateway)
+
+    assert result is None
+    assert gateway.calls == []
+    decision = gateway._reasoning_router_decisions[session_key]
+    assert decision["effort"] == "xhigh"
+    assert decision["shadow_mode"] is True
+    assert decision["override_applied"] is False
+    rows = [
+        json.loads(line)
+        for line in (tmp_path / "logs" / "reasoning-router.jsonl").read_text().splitlines()
+    ]
+    assert rows[-1]["session_key"] == session_key
+    assert rows[-1]["shadow_mode"] is True
+    assert rows[-1]["override_applied"] is False
+
+    status = plugin.reasoning_router_command("status")
+    assert "shadow_mode=on" in status
+    assert "platforms=discord, telegram" in status
+    assert f"session={session_key} effort=xhigh" in status
+    assert "last_override=shadow" in status
+    assert "last_decision_log=ok" in status
 
 
 def test_pending_affirmation_inherits_prior_xhigh_intent():
@@ -1167,6 +1244,35 @@ def test_pending_affirmation_inherits_prior_xhigh_intent():
     assert "affirmed pending" in gateway._reasoning_router_decisions[session_key]["reason"]
 
     gateway.calls.clear()
+    plugin.pre_gateway_dispatch(event("yes"), gateway=gateway, session_store=store)
+    assert gateway.calls[-1] == (session_key, {"enabled": True, "effort": "low"})
+
+
+def test_reasoning_router_command_pending_status_and_clear_control_active_intents():
+    plugin = load_plugin()
+    gateway = FakeGateway({"reasoning_router": {"enabled": True}})
+    session_key = "discord:user-1:chat-1:thread-1"
+    store = FakeSessionStore(session_key, "session-1")
+    plugin.post_llm_call(
+        session_id="session-1",
+        user_message="Plan a production deployment and rollback-safe config migration.",
+        assistant_response="Want me to proceed with deploying the changes?",
+        platform="discord",
+    )
+
+    status = plugin.reasoning_router_command("pending status")
+    assert "Active reasoning-router pending intents:" in status
+    assert "session=session-1" in status
+    assert "effort=xhigh" in status
+    assert "Plan a production deployment and rollback-safe config migration." in status
+
+    assert plugin.reasoning_router_command("pending clear") == (
+        "Reasoning router pending intents cleared (1)."
+    )
+    assert plugin.reasoning_router_command("pending status") == (
+        "No active reasoning-router pending intents."
+    )
+
     plugin.pre_gateway_dispatch(event("yes"), gateway=gateway, session_store=store)
     assert gateway.calls[-1] == (session_key, {"enabled": True, "effort": "low"})
 
