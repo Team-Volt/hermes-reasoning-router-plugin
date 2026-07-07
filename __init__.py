@@ -32,6 +32,7 @@ DEFAULT_CONFIG = {
     "default": "medium",
     "min": "none",
     "max": "xhigh",
+    "shadow_mode": False,
     # Chat surfaces the router is allowed to affect. Unsupported platforms fail
     # open without mutating session reasoning.
     "enabled_platforms": ["discord", "telegram"],
@@ -216,6 +217,11 @@ _PROCEED_ACTION_PATTERNS = tuple(
 )
 _RUNTIME_CONFIG_OVERRIDE: dict[str, Any] | None = None
 _PENDING_INTENTS: dict[str, dict[str, Any]] = {}
+_LAST_HEALTH: dict[str, dict[str, Any] | None] = {
+    "route": None,
+    "override": None,
+    "decision_log": None,
+}
 
 
 def register(ctx) -> None:
@@ -225,7 +231,7 @@ def register(ctx) -> None:
         "reasoning-router",
         reasoning_router_command,
         description="Toggle/status/configure automatic reasoning effort routing",
-        args_hint="status|on|off|min|max|default|threshold|pending|log|recent|test <message>",
+        args_hint="status|on|off|min|max|default|threshold|pending|platforms|shadow|log|recent|test <message>",
     )
 
 
@@ -250,7 +256,8 @@ def pre_gateway_dispatch(event=None, gateway=None, session_store=None, **_kwargs
     # particular, /reasoning must be able to set manual state without us racing
     # it from the pre-dispatch hook.
     if text.lstrip().startswith("/"):
-        _consume_pending_intent_for_event(event, gateway, session_store)
+        if not _slash_command_preserves_pending(text):
+            _consume_pending_intent_for_event(event, gateway, session_store)
         return None
 
     config = _router_config(gateway)
@@ -273,12 +280,44 @@ def pre_gateway_dispatch(event=None, gateway=None, session_store=None, **_kwargs
         session_key=session_key,
     )
     reasoning_config = _reasoning_config_for_effort(effort)
+    route_metadata = _route_metadata_for_decision(
+        effort,
+        reason,
+        text,
+        config,
+        pending_intent=pending_intent,
+    )
+    shadow_mode = _truthy(config.get("shadow_mode", False))
 
-    try:
-        _set_reasoning_override(gateway, session_key, reasoning_config)
-    except Exception as exc:
-        logger.warning("reasoning-router: failed to set session reasoning override: %s", exc)
-        return None
+    if shadow_mode:
+        override_applied = False
+        _record_health(
+            "override",
+            status="shadow",
+            session_key=session_key,
+            effort=effort,
+        )
+    else:
+        try:
+            _set_reasoning_override(gateway, session_key, reasoning_config)
+        except Exception as exc:
+            logger.warning("reasoning-router: failed to set session reasoning override: %s", exc)
+            _record_health(
+                "override",
+                status="failed",
+                session_key=session_key,
+                effort=effort,
+                error=str(exc),
+            )
+            return None
+        override_applied = True
+        _record_health(
+            "override",
+            status="applied",
+            session_key=session_key,
+            effort=effort,
+        )
+
     decision = _record_decision(
         gateway,
         session_key,
@@ -287,6 +326,17 @@ def pre_gateway_dispatch(event=None, gateway=None, session_store=None, **_kwargs
         text,
         event=event,
         pending_intent=pending_intent,
+        route_metadata=route_metadata,
+        shadow_mode=shadow_mode,
+        override_applied=override_applied,
+    )
+    _record_health(
+        "route",
+        status="ok",
+        session_key=session_key,
+        effort=effort,
+        reason=reason,
+        shadow_mode=shadow_mode,
     )
 
     if _truthy(config.get("log_decisions", True)):
@@ -298,7 +348,15 @@ def pre_gateway_dispatch(event=None, gateway=None, session_store=None, **_kwargs
         )
 
     if _truthy(config.get("decision_log", False)):
-        _append_decision_log(config, decision)
+        ok, error = _append_decision_log(config, decision)
+        _record_health(
+            "decision_log",
+            status="ok" if ok else "failed",
+            path=str(_decision_log_path(config)),
+            error=error,
+        )
+    else:
+        _record_health("decision_log", status="disabled")
 
     return None
 
@@ -385,7 +443,8 @@ def reasoning_router_command(raw_args: str = "") -> str:
     if command in {"help", "?"}:
         return (
             "Usage: `/reasoning-router status|on|off|min <effort>|max <effort>|"
-            "default <effort>|threshold <N>|pending on|pending off|log on|log off|recent [N]|test <message>`\n"
+            "default <effort>|threshold <N>|pending [status|clear|on|off]|"
+            "platforms [list]|shadow on|off|log on|off|recent [N]|test <message>`\n"
             "Efforts: none, minimal, low, medium, high, xhigh."
         )
 
@@ -404,6 +463,16 @@ def reasoning_router_command(raw_args: str = "") -> str:
         _update_router_config({command: effort})
         return f"Reasoning router {command} effort set to {effort}."
 
+    if command in {"shadow", "shadow-mode"}:
+        lowered = value.lower()
+        if lowered in {"on", "enable", "enabled", "true", "1", "yes"}:
+            _update_router_config({"shadow_mode": True})
+            return "Reasoning router shadow mode enabled."
+        if lowered in {"off", "disable", "disabled", "false", "0", "no"}:
+            _update_router_config({"shadow_mode": False})
+            return "Reasoning router shadow mode disabled."
+        return "Usage: `/reasoning-router shadow on|off`"
+
     if command in {"log", "decision-log", "jsonl"}:
         lowered = value.lower()
         if lowered in {"on", "enable", "enabled", "true", "1", "yes"}:
@@ -421,8 +490,24 @@ def reasoning_router_command(raw_args: str = "") -> str:
         _update_router_config({"xhigh_high_match_threshold": threshold})
         return f"Reasoning router xhigh threshold set to {threshold} high-complexity categories."
 
+    if command in {"platform", "platforms", "enabled-platforms"}:
+        cfg = _read_router_config_from_disk()
+        if not value:
+            return _format_platforms_status(cfg)
+        platforms = _parse_platform_values(value)
+        if not platforms:
+            return "Usage: `/reasoning-router platforms discord,telegram|all`"
+        _update_router_config({"enabled_platforms": platforms})
+        return f"Reasoning router enabled platforms set to: {', '.join(platforms)}."
+
     if command in {"pending", "continuation", "latch"}:
         lowered = value.lower()
+        if not lowered or lowered == "status":
+            return _format_pending_status()
+        if lowered == "clear":
+            count = len(_PENDING_INTENTS)
+            _PENDING_INTENTS.clear()
+            return f"Reasoning router pending intents cleared ({count})."
         if lowered in {"on", "enable", "enabled", "true", "1", "yes"}:
             _update_router_config({"pending_intent_enabled": True})
             return "Reasoning router pending-intent inheritance enabled."
@@ -430,7 +515,7 @@ def reasoning_router_command(raw_args: str = "") -> str:
             _update_router_config({"pending_intent_enabled": False})
             _PENDING_INTENTS.clear()
             return "Reasoning router pending-intent inheritance disabled and cleared."
-        return "Usage: `/reasoning-router pending on|off`"
+        return "Usage: `/reasoning-router pending status|clear|on|off`"
 
     if command in {"recent", "tail", "decisions"}:
         cfg = _read_router_config_from_disk()
@@ -1101,15 +1186,19 @@ def _update_router_config(updates: dict[str, Any]) -> None:
 def _format_status(config: dict[str, Any]) -> str:
     state = "on" if _truthy(config.get("enabled", True)) else "off"
     pending_state = "on" if _truthy(config.get("pending_intent_enabled", True)) else "off"
+    active_pending = _active_pending_intent_count()
     return (
         f"Reasoning router: {state}\n"
         f"config={_config_path()}\n"
-        f"min={config.get('min')} default={config.get('default')} max={config.get('max')}\n"
+        f"min={config.get('min')} default={config.get('default')} max={config.get('max')} "
+        f"shadow_mode={'on' if _truthy(config.get('shadow_mode', False)) else 'off'}\n"
+        f"platforms={', '.join(sorted(_enabled_platform_names(config)))}\n"
         f"journal_log={bool(_truthy(config.get('log_decisions', True)))} "
         f"decision_log={bool(_truthy(config.get('decision_log', False)))}\n"
         f"decision_log={_decision_log_path(config)}\n"
-        f"pending_intent={pending_state} ttl={_pending_intent_ttl_minutes(config)}m active={len(_PENDING_INTENTS)}\n"
-        f"xhigh_threshold={_safe_int(config.get('xhigh_high_match_threshold'), DEFAULT_CONFIG['xhigh_high_match_threshold'])} high-complexity categories"
+        f"pending_intent={pending_state} ttl={_pending_intent_ttl_minutes(config)}m active={active_pending}\n"
+        f"xhigh_threshold={_safe_int(config.get('xhigh_high_match_threshold'), DEFAULT_CONFIG['xhigh_high_match_threshold'])} high-complexity categories\n"
+        f"{_format_health_status()}"
     )
 
 
@@ -1135,6 +1224,95 @@ def _enabled_platform_names(config: dict[str, Any]) -> set[str]:
     else:
         values = DEFAULT_CONFIG["enabled_platforms"]
     return {str(value).strip().lower() for value in values if str(value).strip()}
+
+def _parse_platform_values(value: str) -> list[str]:
+    parsed: list[str] = []
+    seen: set[str] = set()
+    for part in re.split(r"[,\s]+", value):
+        item = part.strip().lower()
+        if item and item not in seen:
+            parsed.append(item)
+            seen.add(item)
+    return parsed
+
+
+def _format_platforms_status(config: dict[str, Any]) -> str:
+    enabled = sorted(_enabled_platform_names(config))
+    return "Reasoning router enabled platforms: " + (", ".join(enabled) if enabled else "(none)")
+
+
+def _slash_command_preserves_pending(text: str) -> bool:
+    parts = str(text or "").strip().split()
+    if not parts:
+        return False
+    command = parts[0].lower()
+    if command != "/reasoning-router":
+        return False
+    return len(parts) <= 1 or (len(parts) >= 2 and parts[1].lower() == "pending" and (len(parts) == 2 or parts[2].lower() == "status"))
+
+
+def _active_pending_intent_count() -> int:
+    return sum(
+        1
+        for session_id in list(_PENDING_INTENTS)
+        if _active_pending_intent(session_id, DEFAULT_CONFIG)
+    )
+
+
+def _format_pending_status() -> str:
+    active = [
+        pending
+        for session_id in list(_PENDING_INTENTS)
+        for pending in [_active_pending_intent(session_id, DEFAULT_CONFIG)]
+        if pending
+    ]
+    if not active:
+        return "No active reasoning-router pending intents."
+    rendered = []
+    for pending in active[:5]:
+        effort = pending.get("effort", "?")
+        expires = str(pending.get("expires_at", ""))[:19]
+        preview = str(pending.get("user_preview") or pending.get("assistant_preview") or "")[:90]
+        rendered.append(f"- session={pending.get('session_id', '?')} effort={effort} expires={expires} — {preview}")
+    suffix = "" if len(active) <= 5 else f"\n... {len(active) - 5} more"
+    return "Active reasoning-router pending intents:\n" + "\n".join(rendered) + suffix
+
+
+def _record_health(section: str, **values: Any) -> None:
+    if section not in _LAST_HEALTH:
+        return
+    _LAST_HEALTH[section] = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        **values,
+    }
+
+
+def _format_health_status() -> str:
+    route = _LAST_HEALTH.get("route") or {}
+    override = _LAST_HEALTH.get("override") or {}
+    decision_log = _LAST_HEALTH.get("decision_log") or {}
+
+    route_text = "none"
+    if route:
+        route_text = (
+            f"{str(route.get('timestamp', ''))[:19]} "
+            f"session={route.get('session_key', '?')} effort={route.get('effort', '?')}"
+        )
+
+    override_text = str(override.get("status", "none"))
+    if override.get("error"):
+        override_text += f" error={str(override.get('error'))[:80]}"
+
+    log_text = str(decision_log.get("status", "none"))
+    if decision_log.get("error"):
+        log_text += f" error={str(decision_log.get('error'))[:80]}"
+
+    return (
+        f"last_route={route_text}\n"
+        f"last_override={override_text}\n"
+        f"last_decision_log={log_text}"
+    )
+
 
 
 def _platform_enabled(event, config: dict[str, Any]) -> bool:
@@ -1222,6 +1400,82 @@ def _set_reasoning_override(gateway, session_key: str, reasoning_config: dict[st
     raise RuntimeError("gateway does not expose session reasoning overrides")
 
 
+def _route_metadata_for_decision(
+    effort: str,
+    reason: str,
+    text: str,
+    config: dict[str, Any],
+    *,
+    pending_intent: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    lowered = " ".join(str(text or "").split()).lower()
+    matched_groups = _matched_high_groups(lowered)
+    route_source = "deterministic"
+    route_detail = "deterministic"
+    if "semantic classifier" in reason:
+        route_source = "semantic"
+        route_detail = "semantic"
+    elif pending_intent:
+        route_source = "pending"
+        if reason.startswith("affirmed pending"):
+            route_detail = "pending_affirmed"
+        elif reason.startswith("rejected pending"):
+            route_detail = "pending_rejected"
+        else:
+            route_detail = "pending_cleared"
+    elif reason == "default route":
+        route_source = "default"
+        route_detail = "default"
+    elif matched_groups:
+        route_detail = "high_groups"
+    elif reason == "simple factual question":
+        route_detail = "simple_factual"
+    elif reason == "quick/simple message":
+        route_detail = "quick_simple"
+    elif reason.startswith("matched no-op"):
+        route_detail = "no_op"
+
+    raw_effort = _raw_effort_for_reason(reason, config)
+    clamped_from = raw_effort if raw_effort and raw_effort != effort else None
+    metadata: dict[str, Any] = {
+        "route_source": route_source,
+        "route_detail": route_detail,
+        "matched_groups": matched_groups,
+        "clamped_from": clamped_from,
+    }
+    if pending_intent:
+        metadata["pending_intent_used"] = reason.startswith("affirmed pending")
+        metadata["pending_intent_cleared"] = True
+    return metadata
+
+
+def _raw_effort_for_reason(reason: str, config: dict[str, Any]) -> str | None:
+    if reason.startswith("affirmed pending"):
+        match = re.search(r"\(([^)]+)\)", reason)
+        return match.group(1) if match else None
+    if "xhigh" in reason or "multiple high-complexity" in reason:
+        return "xhigh"
+    if "high-complexity category" in reason or "implementation approval" in reason:
+        return "high"
+    if (
+        "documentation wording" in reason
+        or "technical feasibility" in reason
+        or "opinion" in reason
+        or "config snippet" in reason
+        or "normal tool/status" in reason
+        or "semantic classifier" in reason
+    ):
+        return "medium"
+    if "no-op" in reason:
+        return "none"
+    if reason in {"simple factual question", "quick/simple message"}:
+        return "low"
+    if reason == "default route":
+        default = str(config.get("default") or DEFAULT_CONFIG["default"]).lower()
+        return default if default in EFFORT_ORDER else DEFAULT_CONFIG["default"]
+    return None
+
+
 def _record_decision(
     gateway,
     session_key: str,
@@ -1231,6 +1485,9 @@ def _record_decision(
     *,
     event=None,
     pending_intent: dict[str, Any] | None = None,
+    route_metadata: dict[str, Any] | None = None,
+    shadow_mode: bool = False,
+    override_applied: bool = True,
 ) -> dict[str, Any]:
     source = getattr(event, "source", None)
     platform = _platform_name(event)
@@ -1244,6 +1501,9 @@ def _record_decision(
         "effort": effort,
         "reason": reason,
         "message_preview": text[:160],
+        "shadow_mode": bool(shadow_mode),
+        "override_applied": bool(override_applied),
+        **(route_metadata or {}),
     }
     if pending_intent:
         decision["pending_task_preview"] = pending_intent.get("user_preview") or pending_intent.get("assistant_preview")
@@ -1266,14 +1526,16 @@ def _decision_log_path(config: dict[str, Any]) -> Path:
     return path
 
 
-def _append_decision_log(config: dict[str, Any], decision: dict[str, Any]) -> None:
+def _append_decision_log(config: dict[str, Any], decision: dict[str, Any]) -> tuple[bool, str | None]:
     path = _decision_log_path(config)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(decision, sort_keys=True, separators=(",", ":")) + "\n")
+        return True, None
     except Exception as exc:
         logger.warning("reasoning-router: failed to append decision log %s: %s", path, exc)
+        return False, str(exc)
 
 
 def _format_recent_decisions(config: dict[str, Any], *, limit: int = 5) -> str:

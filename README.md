@@ -118,6 +118,7 @@ enabled: true
 default: medium
 min: none
 max: xhigh
+shadow_mode: false
 
 # Gateway platforms the router may affect. Unsupported platforms pass through
 # without mutating session reasoning.
@@ -155,7 +156,8 @@ Config fields:
 | `default` | `medium` | Fallback effort when no deterministic rule or accepted semantic result strongly matches. Valid efforts: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`. |
 | `min` | `none` | Minimum allowed effort after routing. Invalid values are ignored. |
 | `max` | `xhigh` | Maximum allowed effort after routing. Invalid values are ignored. If `min` is higher than `max`, the plugin swaps the clamp bounds. |
-| `enabled_platforms` | `[discord, telegram]` | Gateway platform allowlist. Platforms outside the list pass through unchanged. Use `all` or `*` only if you have verified the target gateway surface emits normal Hermes `MessageEvent` / `SessionSource` objects. |
+| `shadow_mode` | `false` | Classify, log, and write decision records without mutating Hermes session reasoning. Useful for rollout and tuning. |
+| `enabled_platforms` | `[discord, telegram]` | Gateway platform allowlist. Platforms outside the list pass through unchanged. Use `all` or `*` only if you have verified the target gateway surface emits normal Hermes `MessageEvent` / `SessionSource` objects. Can be changed with `/reasoning-router platforms ...`. |
 | `log_decisions` | `true` | Log concise routing decisions to the Hermes gateway logger / journal. |
 | `decision_log` | `false` | Write persistent JSONL routing decisions for later review. |
 | `decision_log_path` | `logs/reasoning-router.jsonl` | JSONL path. Relative paths resolve under `~/.hermes`; absolute paths are used as-is. |
@@ -186,7 +188,7 @@ enabled_platforms: [discord, telegram]
 low_char_limit: 80
 xhigh_high_match_threshold: 4
 pending_intent_enabled: true
-```
+shadow_mode: false
 
 Persistent audit trail for tuning:
 
@@ -194,6 +196,7 @@ Persistent audit trail for tuning:
 decision_log: true
 decision_log_path: logs/reasoning-router.jsonl
 log_decisions: true
+shadow_mode: false
 ```
 
 Conservative semantic classifier via local OpenAI-compatible proxy:
@@ -272,7 +275,9 @@ Useful commands:
 /reasoning-router max <effort>
 /reasoning-router default <effort>
 /reasoning-router threshold <N>
-/reasoning-router pending on|off
+/reasoning-router pending [status|clear|on|off]
+/reasoning-router platforms [discord,telegram|all]
+/reasoning-router shadow on|off
 /reasoning-router log on|off
 /reasoning-router recent [N]
 /reasoning-router test <message>
@@ -306,7 +311,7 @@ When `decision_log: true`, the plugin writes JSONL rows to:
 ~/.hermes/logs/reasoning-router.jsonl
 ```
 
-Each row includes timestamp, platform, user/chat/thread IDs, session key, selected effort, routing reason, and a short message preview. Pending-intent approvals include the inherited pending effort and previews of the pending task.
+Each row includes timestamp, platform, user/chat/thread IDs, session key, selected effort, routing reason, a short message preview, whether shadow mode skipped the override, whether an override was applied, and structured route metadata (`route_source`, `route_detail`, `matched_groups`, and `clamped_from`). Pending-intent approvals include the inherited pending effort and previews of the pending task.
 
 ## Live semantic classifier
 
