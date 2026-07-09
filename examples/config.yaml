@@ -5,11 +5,14 @@
 enabled: true
 
 # Fallback when no deterministic rule or accepted semantic result strongly matches.
-# Valid efforts: none, minimal, low, medium, high, xhigh.
+# Valid efforts: none, minimal, low, medium, high, xhigh, max.
+# Codex's Ultra product label is accepted as an alias for max.
 default: medium
 
 # Clamp all routing decisions into this range.
 min: none
+# Keep xhigh as the conservative default. Set to max (or ultra) only when the
+# active provider/model supports the maximum tier.
 max: xhigh
 
 # Classify and log decisions without mutating Hermes session reasoning.

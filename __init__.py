@@ -26,7 +26,8 @@ except Exception:  # pragma: no cover - Hermes normally depends on PyYAML
 
 logger = logging.getLogger(__name__)
 
-EFFORT_ORDER = ("none", "minimal", "low", "medium", "high", "xhigh")
+EFFORT_ORDER = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
+EFFORT_ALIASES = {"ultra": "max"}
 DEFAULT_CONFIG = {
     "enabled": True,
     "default": "medium",
@@ -57,10 +58,19 @@ DEFAULT_CONFIG = {
     "pending_intent_ttl_minutes": 30,
 }
 
+# ``Ultra`` is Codex's orchestration label, not a provider reasoning.effort wire
+# value. Normalize explicit Ultra requests to the canonical ``max`` effort.
+_MAX_PATTERNS = (
+    r"^(?:please\s+)?(?:use|set|switch|route|run|enable|apply)\s+(?:the\s+)?(?:max(?:imum)?|ultra)(?:\s+reasoning)?\b",
+    r"^(?:can|could|would|will)\s+you(?:\s+please)?\s+(?:use|set|switch|route|run|enable|apply)\s+(?:the\s+)?(?:max(?:imum)?|ultra)(?:\s+reasoning)?\b",
+    r"^(?:please\s+)?(?:reason|think)\b.{0,24}\b(?:at\s+)?(?:max(?:imum)?|ultra)\b",
+    r"^(?:max(?:imum)?\s+reasoning|ultra(?:\s+reasoning)?)(?:\s*,?\s*please)?(?:\s+(?:for|on|to)\b.*)?[.!?\s]*$",
+)
+
 # Explicit xhigh means: slow down; this is multi-system, risky, architectural,
 # security-sensitive, or asks for unusually complete execution.
 _XHIGH_PATTERNS = (
-    r"\b(xhigh|extra\s*high|maximum\s+reasoning|think\s+hard(?:er)?)\b",
+    r"\b(xhigh|extra\s*high|think\s+hard(?:er)?)\b",
     r"\b(be\s+thorough|flesh\s+out|boil\s+the\s+ocean|do\s+the\s+whole\s+thing|end\s+to\s+end)\b",
     r"\b(architecture|architectural|design\s+decision|tradeoff|strategy|migration\s+plan)\b",
     r"\b(security|auth|oauth|credential|secret|permission|token|ssrf|injection)\b",
@@ -169,6 +179,7 @@ _LOW_PATTERNS = (
     r"\b(quick|brief|one\s+sentence|short answer)\b",
 )
 
+_COMPILED_MAX = tuple(re.compile(pattern, re.I) for pattern in _MAX_PATTERNS)
 _COMPILED_XHIGH = tuple(re.compile(pattern, re.I) for pattern in _XHIGH_PATTERNS)
 _COMPILED_DOCS_POLISH = tuple(re.compile(pattern, re.I) for pattern in _DOCS_POLISH_PATTERNS)
 _COMPILED_DOCS_POLISH_RISK = tuple(
@@ -445,7 +456,7 @@ def reasoning_router_command(raw_args: str = "") -> str:
             "Usage: `/reasoning-router status|on|off|min <effort>|max <effort>|"
             "default <effort>|threshold <N>|pending [status|clear|on|off]|"
             "platforms [list]|shadow on|off|log on|off|recent [N]|test <message>`\n"
-            "Efforts: none, minimal, low, medium, high, xhigh."
+            "Efforts: none, minimal, low, medium, high, xhigh, max (Ultra is accepted as an alias for max)."
         )
 
     if command in {"on", "enable", "enabled"}:
@@ -457,7 +468,7 @@ def reasoning_router_command(raw_args: str = "") -> str:
         return "Reasoning router disabled. Use `/reasoning-router on` to re-enable."
 
     if command in {"min", "max", "default"}:
-        effort = value.lower()
+        effort = _normalize_effort_name(value)
         if effort not in EFFORT_ORDER:
             return f"Invalid effort `{value}`. Use one of: {', '.join(EFFORT_ORDER)}."
         _update_router_config({command: effort})
@@ -540,18 +551,23 @@ def classify_message(text: str, config: dict[str, Any] | None = None) -> tuple[s
     normalized = " ".join(text.strip().split())
     lowered = normalized.lower()
 
-    # Documentation/install-prompt wording can mention operational words like
-    # "restart the gateway" or "systemctl" without asking us to touch live ops.
-    # Keep that at medium unless other non-docs risk categories dominate.
-    if _is_docs_polish_request(lowered):
-        return _clamp_effort("medium", cfg), "documentation wording/install-prompt polish"
-
     # Strongest wins. Avoid low-routing a short sentence like "go ahead and set
     # up the automation" just because it is brief. Definition-style questions
     # get a cheap factual route before risk keywords so "what is OAuth?" does
     # not look like an auth migration.
     if _is_simple_factual_question(lowered):
         return _clamp_effort("low", cfg), "simple factual question"
+
+    # Explicit effort directives outrank content-category shortcuts: "Use maximum
+    # reasoning to polish the README" is still a request to use maximum effort.
+    if _matches(_COMPILED_MAX, lowered):
+        return _clamp_effort("max", cfg), "explicit maximum/Ultra reasoning request"
+
+    # Documentation/install-prompt wording can mention operational words like
+    # "restart the gateway" or "systemctl" without asking us to touch live ops.
+    # Keep that at medium unless other non-docs risk categories dominate.
+    if _is_docs_polish_request(lowered):
+        return _clamp_effort("medium", cfg), "documentation wording/install-prompt polish"
 
     # Question/clarification forms get one semantic pass so words like
     # "restart gateway" do not over-route when the user is only asking whether a
@@ -633,7 +649,7 @@ def classify_message(text: str, config: dict[str, Any] | None = None) -> tuple[s
     if _matches(_COMPILED_MEDIUM, lowered):
         return _clamp_effort("medium", cfg), "matched normal tool/status keywords"
 
-    default = str(cfg.get("default") or DEFAULT_CONFIG["default"]).lower()
+    default = _normalize_effort_name(cfg.get("default") or DEFAULT_CONFIG["default"])
     if default not in EFFORT_ORDER:
         default = DEFAULT_CONFIG["default"]
     return _clamp_effort(default, cfg), "default route"
@@ -721,7 +737,7 @@ def _normalize_semantic_classifier_result(result: Any) -> dict[str, Any] | None:
     if not isinstance(result, dict):
         return None
 
-    effort = str(result.get("effort") or "").lower()
+    effort = _normalize_effort_name(result.get("effort") or "")
     if effort not in EFFORT_ORDER:
         return None
     if effort == "minimal":
@@ -954,7 +970,7 @@ def _max_effort(efforts: Iterable[str], config: dict[str, Any]) -> str:
     best = "none"
     best_idx = EFFORT_ORDER.index(best)
     for effort in efforts:
-        effort = str(effort or "").lower()
+        effort = _normalize_effort_name(effort)
         if effort not in EFFORT_ORDER:
             continue
         idx = EFFORT_ORDER.index(effort)
@@ -1336,13 +1352,18 @@ def _safe_float(value: Any, default: float) -> float:
         return default
 
 
+def _normalize_effort_name(value: Any) -> str:
+    effort = str(value or "").strip().lower()
+    return EFFORT_ALIASES.get(effort, effort)
+
+
 def _clamp_effort(effort: str, config: dict[str, Any]) -> str:
-    effort = effort.lower()
+    effort = _normalize_effort_name(effort)
     if effort not in EFFORT_ORDER:
         effort = DEFAULT_CONFIG["default"]
 
-    min_effort = str(config.get("min") or DEFAULT_CONFIG["min"]).lower()
-    max_effort = str(config.get("max") or DEFAULT_CONFIG["max"]).lower()
+    min_effort = _normalize_effort_name(config.get("min") or DEFAULT_CONFIG["min"])
+    max_effort = _normalize_effort_name(config.get("max") or DEFAULT_CONFIG["max"])
     if min_effort not in EFFORT_ORDER:
         min_effort = DEFAULT_CONFIG["min"]
     if max_effort not in EFFORT_ORDER:
@@ -1358,8 +1379,11 @@ def _clamp_effort(effort: str, config: dict[str, Any]) -> str:
 
 
 def _reasoning_config_for_effort(effort: str) -> dict[str, Any]:
+    effort = _normalize_effort_name(effort)
     if effort == "none":
         return {"enabled": False}
+    if effort not in EFFORT_ORDER:
+        effort = DEFAULT_CONFIG["default"]
     return {"enabled": True, "effort": effort}
 
 

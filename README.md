@@ -15,6 +15,8 @@ It is useful when one chat contains both tiny messages (`thanks`, `what time is 
   - `medium`
   - `high`
   - `xhigh`
+  - `max`
+- Accepts Codex's `Ultra` product/orchestration label as an alias for provider effort `max`; it never sends the invalid literal wire effort `ultra`.
 - Uses Hermes' session reasoning override, so the selected effort reaches the provider as request configuration rather than prompt text.
 - Keeps simple messages cheap.
 - Sends implementation/config/debugging/system work to higher effort.
@@ -53,8 +55,15 @@ If `semantic_classifier_enabled` is true, deterministic routing still runs first
 | `medium` | Normal inspection, research, status checks, file/log questions, short technical feasibility follow-ups |
 | `high` | Implementation, config changes, debugging, Hermes internals, ops, tests, verification, audit/log work |
 | `xhigh` | Architecture, security/auth, rollback-sensitive work, multi-system changes, gateway restarts, explicit “think hard” requests |
+| `max` | Explicit maximum/Ultra reasoning requests when the configured `max` clamp and active provider/model allow it |
 
 High-complexity categories are counted. If a message hits at least `xhigh_high_match_threshold` categories, it routes to `xhigh` even without an explicit “xhigh” phrase.
+
+### GPT-5.6 Sol, Terra, and Luna
+
+The router is model-agnostic and works with the Codex model IDs `gpt-5.6-sol`, `gpt-5.6-terra`, and `gpt-5.6-luna`. All three accept the provider reasoning effort `max`. Codex may call its maximum orchestration tier **Ultra**, but `ultra` is not a valid `reasoning.effort` wire value; the router normalizes that label to `max` before setting Hermes' session override.
+
+The default router clamp remains `max: xhigh` for backward compatibility and predictable cost. Opt into the new tier with `/reasoning-router max max` (or `/reasoning-router max ultra`) only when the active provider/model supports it.
 
 ## Repository contents
 
@@ -153,7 +162,7 @@ Config fields:
 | Field | Default | Meaning |
 |---|---:|---|
 | `enabled` | `true` | Turns the router on or off. When off, messages pass through without changing reasoning. |
-| `default` | `medium` | Fallback effort when no deterministic rule or accepted semantic result strongly matches. Valid efforts: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`. |
+| `default` | `medium` | Fallback effort when no deterministic rule or accepted semantic result strongly matches. Valid efforts: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`; `ultra` is accepted as an alias for `max`. |
 | `min` | `none` | Minimum allowed effort after routing. Invalid values are ignored. |
 | `max` | `xhigh` | Maximum allowed effort after routing. Invalid values are ignored. If `min` is higher than `max`, the plugin swaps the clamp bounds. |
 | `shadow_mode` | `false` | Classify, log, and write decision records without mutating Hermes session reasoning. Useful for rollout and tuning. |
@@ -340,7 +349,7 @@ The classifier should return JSON in the assistant message content:
 }
 ```
 
-Accepted `effort` values are `none`, `low`, `medium`, `high`, and `xhigh`; `minimal` is accepted but normalized to `low`. Results with invalid effort, invalid JSON, missing content, HTTP errors, timeouts, or confidence below `semantic_classifier_min_confidence` are ignored and the router falls back to deterministic classification.
+Accepted `effort` values are `none`, `low`, `medium`, `high`, `xhigh`, and `max`; `minimal` is normalized to `low`, and `ultra` is normalized to `max`. Results with invalid effort, invalid JSON, missing content, HTTP errors, timeouts, or confidence below `semantic_classifier_min_confidence` are ignored and the router falls back to deterministic classification.
 
 The classifier receives only compact routing context: the current user message, the last assistant intent when available, an optional pending action string, and up to three recent user/assistant messages read from Hermes `state.db`. That context is for resolving terse approvals and deictic references, not for solving the request.
 

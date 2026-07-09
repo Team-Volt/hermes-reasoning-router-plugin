@@ -19,7 +19,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
 
-EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh")
+EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 DEFAULT_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
 
