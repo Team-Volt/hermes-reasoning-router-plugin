@@ -77,6 +77,20 @@ def test_load_decisions_skips_bad_rows_and_dedupes_by_message_and_effort(tmp_pat
     assert stats["skipped_rows"] == 2
 
 
+def test_load_decisions_accepts_max_effort(tmp_path):
+    module = load_eval_module()
+    log_path = tmp_path / "reasoning-router.jsonl"
+    write_jsonl(log_path, [{"message_preview": "Use maximum reasoning", "effort": "max"}])
+
+    decisions, stats = module.load_decisions(log_path)
+
+    assert [(decision.message, decision.effort) for decision in decisions] == [
+        ("Use maximum reasoning", "max")
+    ]
+    assert stats["loaded_rows"] == 1
+    assert stats["skipped_rows"] == 0
+
+
 def test_leave_one_out_eval_uses_injected_embedder_and_reports_confusion():
     module = load_eval_module()
     decisions = [

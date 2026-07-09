@@ -313,6 +313,92 @@ def test_default_config_allows_xhigh():
     assert "xhigh" in reason or "multiple" in reason
 
 
+@pytest.mark.parametrize(
+    "message",
+    (
+        "Use maximum reasoning for this review.",
+        "Use ultra reasoning for this review.",
+        "Use ultra for this review.",
+        "Ultra, please.",
+        "Use maximum reasoning to polish the README wording.",
+    ),
+)
+def test_explicit_maximum_names_route_to_max_when_cap_allows(message):
+    plugin = load_plugin()
+    gateway = FakeGateway({"reasoning_router": {"enabled": True, "max": "max"}})
+
+    result = plugin.pre_gateway_dispatch(event(message), gateway=gateway)
+
+    assert result is None
+    assert gateway.calls == [
+        (
+            "discord:user-1:chat-1:thread-1",
+            {"enabled": True, "effort": "max"},
+        )
+    ]
+
+
+def test_unrelated_ultra_product_name_does_not_route_to_max():
+    plugin = load_plugin()
+
+    effort, _reason = plugin.classify_message(
+        "Compare Ultra Mobile plans, coverage, pricing, roaming, and restrictions before I choose a carrier.",
+        {"max": "max"},
+    )
+
+    assert effort == "medium"
+
+
+@pytest.mark.parametrize(
+    "message",
+    (
+        "Does gpt-5.6 support maximum reasoning?",
+        "Explain what maximum reasoning means.",
+        "Compare the ultra reasoning mode with xhigh.",
+        "How do I use maximum reasoning?",
+    ),
+)
+def test_informational_maximum_mentions_do_not_route_to_max(message):
+    plugin = load_plugin()
+
+    effort, _reason = plugin.classify_message(message, {"max": "max"})
+
+    assert effort != "max"
+
+
+def test_default_cap_keeps_explicit_maximum_request_at_xhigh():
+    plugin = load_plugin()
+
+    effort, _reason = plugin.classify_message("Use maximum reasoning for this review.")
+
+    assert effort == "xhigh"
+
+
+def test_ultra_alias_is_normalized_before_building_provider_config():
+    plugin = load_plugin()
+
+    assert plugin._reasoning_config_for_effort("ultra") == {
+        "enabled": True,
+        "effort": "max",
+    }
+
+
+def test_max_effort_ranks_max_above_xhigh():
+    plugin = load_plugin()
+
+    assert plugin._max_effort(("high", "xhigh", "max"), {"max": "max"}) == "max"
+
+
+def test_semantic_classifier_normalizes_ultra_alias_to_max():
+    plugin = load_plugin()
+
+    result = plugin._normalize_semantic_classifier_result(
+        {"effort": "ultra", "confidence": 0.95, "risk_categories": [], "reason": "explicit"}
+    )
+
+    assert result is not None
+    assert result["effort"] == "max"
+
 
 def test_short_technical_feasibility_followup_routes_medium():
     plugin = load_plugin()
@@ -1115,6 +1201,17 @@ def test_reasoning_router_command_platforms_shows_and_writes_enabled_platforms(t
     assert plugin.reasoning_router_command("platforms") == (
         "Reasoning router enabled platforms: discord, slack, telegram"
     )
+
+
+def test_reasoning_router_command_normalizes_ultra_alias_to_max(tmp_path, monkeypatch):
+    plugin = load_plugin()
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    output = plugin.reasoning_router_command("max ultra")
+    plugin_cfg = yaml.safe_load((tmp_path / "reasoning-router" / "config.yaml").read_text())
+
+    assert output == "Reasoning router max effort set to max."
+    assert plugin_cfg["max"] == "max"
 
 def test_runtime_command_override_does_not_shadow_later_disk_edit(tmp_path, monkeypatch):
     plugin = load_plugin()
