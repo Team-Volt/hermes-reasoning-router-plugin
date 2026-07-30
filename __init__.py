@@ -36,7 +36,7 @@ DEFAULT_CONFIG = {
     "shadow_mode": False,
     # Chat surfaces the router is allowed to affect. Unsupported platforms fail
     # open without mutating session reasoning.
-    "enabled_platforms": ["discord", "telegram"],
+    "enabled_platforms": ["discord", "telegram", "buzz"],
     # systemd/journald logging through the normal Hermes gateway logger
     "log_decisions": True,
     # persistent JSONL audit trail for later inspection or external audits
@@ -258,6 +258,17 @@ def pre_gateway_dispatch(event=None, gateway=None, session_store=None, **_kwargs
 
     if bool(getattr(event, "internal", False)):
         return None
+
+    # Gateway dispatch runs plugin hooks before central authorization. Avoid
+    # creating overrides, pending-intent changes, or logs for rejected senders.
+    auth_fn = getattr(gateway, "_is_user_authorized", None)
+    if callable(auth_fn):
+        try:
+            if not auth_fn(getattr(event, "source", None)):
+                return None
+        except Exception:
+            logger.debug("reasoning-router: authorization check failed", exc_info=True)
+            return None
 
     text = str(getattr(event, "text", "") or "")
     if not text.strip():
@@ -507,7 +518,7 @@ def reasoning_router_command(raw_args: str = "") -> str:
             return _format_platforms_status(cfg)
         platforms = _parse_platform_values(value)
         if not platforms:
-            return "Usage: `/reasoning-router platforms discord,telegram|all`"
+            return "Usage: `/reasoning-router platforms discord,telegram,buzz|all`"
         _update_router_config({"enabled_platforms": platforms})
         return f"Reasoning router enabled platforms set to: {', '.join(platforms)}."
 

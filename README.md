@@ -1,14 +1,14 @@
 # reasoning-router
 
-`reasoning-router` is a Hermes gateway plugin that automatically chooses the reasoning effort for each incoming Discord or Telegram gateway message.
+`reasoning-router` is a Hermes gateway plugin that automatically chooses the reasoning effort for each incoming Discord, Telegram, or Buzz gateway message.
 
 It is useful when one chat contains both tiny messages (`thanks`, `what time is it?`) and deeper work (`debug this gateway issue`, `patch the plugin and verify it`). Instead of running every turn at the same reasoning level, the plugin classifies the incoming request and sets Hermes' real per-session reasoning override before the model request is made.
 
-> Current chat-surface support: **Discord and Telegram gateway messages**. Telegram support uses Hermes' normalized `MessageEvent` / `SessionSource` path and has synthetic fixture coverage for Telegram session keys, topic/thread IDs, platform gating, and decision logging. Cron jobs and non-gateway surfaces do not use this router.
+> Current chat-surface support: **Discord, Telegram, and Buzz gateway messages**. All three use Hermes' normalized `MessageEvent` / `SessionSource` path. Tests cover Discord/Telegram topic or thread keys, Buzz's no-thread key shape, platform gating, and decision records. Cron jobs and non-gateway surfaces do not use this router.
 
 ## What it does
 
-- Routes each enabled Discord or Telegram gateway message to one of:
+- Routes each enabled Discord, Telegram, or Buzz gateway message to one of:
   - `none`
   - `minimal`
   - `low`
@@ -81,7 +81,7 @@ The default router clamp remains `max: xhigh` for backward compatibility and pre
 ## Requirements
 
 - Hermes Agent with gateway plugins available
-- A Discord or Telegram gateway/chat surface
+- A Discord, Telegram, or Buzz gateway/chat surface
 - Python 3.11+
 
 ## Install
@@ -120,6 +120,8 @@ cp ~/.hermes/plugins/reasoning-router/examples/config.yaml \
 
 Legacy installs with `~/.hermes/plugins/reasoning-router/config.yaml` still read that file if the standalone config is missing, but slash-command writes now go to the standalone path.
 
+Upgrades keep an existing explicit platform allowlist unchanged. Add `buzz` to `enabled_platforms`, or run `/reasoning-router platforms discord,telegram,buzz`, to enable Buzz on an existing install.
+
 Example config with every supported persistent option:
 
 ```yaml
@@ -134,6 +136,7 @@ shadow_mode: false
 enabled_platforms:
   - discord
   - telegram
+  - buzz
 
 log_decisions: true
 decision_log: true
@@ -166,7 +169,7 @@ Config fields:
 | `min` | `none` | Minimum allowed effort after routing. Invalid values are ignored. |
 | `max` | `xhigh` | Maximum allowed effort after routing. Invalid values are ignored. If `min` is higher than `max`, the plugin swaps the clamp bounds. |
 | `shadow_mode` | `false` | Classify, log, and write decision records without mutating Hermes session reasoning. Useful for rollout and tuning. |
-| `enabled_platforms` | `[discord, telegram]` | Gateway platform allowlist. Platforms outside the list pass through unchanged. Use `all` or `*` only if you have verified the target gateway surface emits normal Hermes `MessageEvent` / `SessionSource` objects. Can be changed with `/reasoning-router platforms ...`. |
+| `enabled_platforms` | `[discord, telegram, buzz]` | Gateway platform allowlist. Platforms outside the list pass through unchanged. Use `all` or `*` only if you have verified the target gateway surface emits normal Hermes `MessageEvent` / `SessionSource` objects. Can be changed with `/reasoning-router platforms ...`. |
 | `log_decisions` | `true` | Log concise routing decisions to the Hermes gateway logger / journal. |
 | `decision_log` | `false` | Write persistent JSONL routing decisions for later review. |
 | `decision_log_path` | `logs/reasoning-router.jsonl` | JSONL path. Relative paths resolve under `~/.hermes`; absolute paths are used as-is. |
@@ -193,7 +196,7 @@ min: none
 max: high
 log_decisions: true
 decision_log: false
-enabled_platforms: [discord, telegram]
+enabled_platforms: [discord, telegram, buzz]
 low_char_limit: 80
 xhigh_high_match_threshold: 4
 pending_intent_enabled: true
@@ -285,7 +288,7 @@ Useful commands:
 /reasoning-router default <effort>
 /reasoning-router threshold <N>
 /reasoning-router pending [status|clear|on|off]
-/reasoning-router platforms [discord,telegram|all]
+/reasoning-router platforms [discord,telegram,buzz|all]
 /reasoning-router shadow on|off
 /reasoning-router log on|off
 /reasoning-router recent [N]
@@ -393,7 +396,7 @@ Install the Hermes reasoning-router plugin from https://github.com/Team-Volt/her
 Use the README as the source of truth. Install it as a Hermes user plugin, copy the example config, enable the plugin if this Hermes setup requires explicit plugin enablement, and verify that it loads.
 
 Important constraints:
-- It supports Discord and Telegram gateway messages.
+- It supports Discord, Telegram, and Buzz gateway messages.
 - Do not edit Hermes source code.
 - Preserve existing Hermes config and enabled plugins.
 - Use profile-specific paths if this install uses a Hermes profile.
@@ -404,7 +407,7 @@ Important constraints:
 
 ## Notes and limitations
 
-- Discord and Telegram gateway messages are the supported chat surfaces. Other platforms are ignored unless explicitly added to `enabled_platforms`, and should only be added after adapter/event-shape verification.
+- Discord, Telegram, and Buzz gateway messages are the supported chat surfaces. Other platforms are ignored unless explicitly added to `enabled_platforms`, and should only be added after adapter/event-shape verification.
 - Cron jobs do not pass through the gateway dispatch hook and therefore do not use this router.
 - The plugin depends on Hermes gateway internals for session reasoning overrides. It guards those calls and fails open, but future Hermes changes could require a small compatibility update.
 - The default classifier is deterministic and intentionally inspectable; it is not an LLM judge.
