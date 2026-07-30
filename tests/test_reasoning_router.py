@@ -39,6 +39,9 @@ class FakeGateway:
     def _set_session_reasoning_override(self, session_key, reasoning_config):
         self.calls.append((session_key, reasoning_config))
 
+    def _is_user_authorized(self, source) -> bool:
+        return True
+
 
 class FakeSessionStore:
     def __init__(self, session_key: str, session_id: str):
@@ -140,12 +143,59 @@ def test_telegram_message_routes_with_gateway_session_key():
     assert decision["thread_id"] == "topic-42"
 
 
-def test_default_enabled_platforms_include_discord_and_telegram():
+def test_buzz_message_routes_with_gateway_session_key():
+    plugin = load_plugin()
+    gateway = FakeGateway({"reasoning_router": {"enabled": True}})
+
+    result = plugin.pre_gateway_dispatch(
+        event(
+            "Patch the Buzz gateway handling and run the focused tests",
+            platform="buzz",
+            chat_id="buzz-group-1",
+            thread_id=None,
+        ),
+        gateway=gateway,
+    )
+
+    assert result is None
+    assert gateway.calls == [
+        (
+            "buzz:user-1:buzz-group-1:",
+            {"enabled": True, "effort": "high"},
+        )
+    ]
+    decision = getattr(gateway, "_reasoning_router_decisions")["buzz:user-1:buzz-group-1:"]
+    assert decision["platform"] == "buzz"
+    assert decision["chat_id"] == "buzz-group-1"
+    assert decision["thread_id"] is None
+
+
+def test_unauthorized_buzz_message_has_no_router_side_effects():
     plugin = load_plugin()
 
-    assert plugin.DEFAULT_CONFIG["enabled_platforms"] == ["discord", "telegram"]
+    class UnauthorizedGateway(FakeGateway):
+        def _is_user_authorized(self, source) -> bool:
+            return False
 
-def test_metadata_descriptions_cover_discord_and_telegram():
+    gateway = UnauthorizedGateway({"reasoning_router": {"enabled": True}})
+
+    result = plugin.pre_gateway_dispatch(
+        event("Patch the Buzz gateway handling and run tests", platform="buzz"),
+        gateway=gateway,
+    )
+
+    assert result is None
+    assert gateway.calls == []
+    assert not hasattr(gateway, "_reasoning_router_decisions")
+
+
+def test_default_enabled_platforms_include_supported_chat_surfaces():
+    plugin = load_plugin()
+
+    assert plugin.DEFAULT_CONFIG["enabled_platforms"] == ["discord", "telegram", "buzz"]
+
+
+def test_metadata_descriptions_cover_supported_chat_surfaces():
     plugin_metadata = yaml.safe_load((PLUGIN_ROOT / "plugin.yaml").read_text())
     project_metadata = tomllib.loads((PLUGIN_ROOT / "pyproject.toml").read_text())
 
@@ -156,6 +206,7 @@ def test_metadata_descriptions_cover_discord_and_telegram():
     for description in descriptions:
         assert "Discord" in description
         assert "Telegram" in description
+        assert "Buzz" in description
 
 
 def test_string_platform_is_recorded_in_decisions():
@@ -197,14 +248,14 @@ def test_string_platform_is_recorded_in_decisions():
 
 
 
-def test_enabled_platforms_skips_platforms_outside_allowlist():
+def test_explicit_legacy_allowlist_skips_buzz():
     plugin = load_plugin()
     gateway = FakeGateway(
         {"reasoning_router": {"enabled": True, "enabled_platforms": ["discord", "telegram"]}}
     )
 
     result = plugin.pre_gateway_dispatch(
-        event("Patch the Slack gateway handling and run tests", platform="slack"),
+        event("Patch the Buzz gateway handling and run tests", platform="buzz", thread_id=None),
         gateway=gateway,
     )
 
@@ -1190,7 +1241,7 @@ def test_reasoning_router_command_platforms_shows_and_writes_enabled_platforms(t
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
 
     assert plugin.reasoning_router_command("platforms") == (
-        "Reasoning router enabled platforms: discord, telegram"
+        "Reasoning router enabled platforms: buzz, discord, telegram"
     )
 
     output = plugin.reasoning_router_command("platforms discord,telegram,slack")

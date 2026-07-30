@@ -1,6 +1,6 @@
 name: reasoning-router
 version: 0.3.6
-description: "Automatically chooses per-session Hermes reasoning effort from incoming Discord and Telegram gateway messages and inherits pending task intent across terse approvals."
+description: "Automatically chooses per-session Hermes reasoning effort from incoming Discord, Telegram, and Buzz gateway messages and inherits pending task intent across terse approvals."
 author: "Hermes Reasoning Router contributors"
 provides_hooks:
   - pre_gateway_dispatch
