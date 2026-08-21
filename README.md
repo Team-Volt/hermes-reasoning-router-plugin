@@ -151,7 +151,7 @@ pending_intent_ttl_minutes: 30
 # Optional live semantic classifier. Disabled by default.
 semantic_classifier_enabled: false
 semantic_classifier_url: http://127.0.0.1:8080/v1/chat/completions
-semantic_classifier_model: gpt-5.4-mini
+semantic_classifier_model: gpt-5.6-luna
 # Prefer CODEX_PROXY_API_KEY or OPENAI_API_KEY in the environment instead of
 # storing a key here. Leave empty to use env vars, or omit the field entirely.
 semantic_classifier_api_key: ""
@@ -179,7 +179,7 @@ Config fields:
 | `pending_intent_ttl_minutes` | `30` | Expiration window for pending approval intent. Values below 1 are clamped to 1 minute. |
 | `semantic_classifier_enabled` | `false` | Enables the optional OpenAI-compatible classifier for ambiguous cases only. Deterministic guardrails still win. |
 | `semantic_classifier_url` | `http://127.0.0.1:8080/v1/chat/completions` | Chat-completions endpoint used by the semantic classifier. Intended for a local codex-proxy/OpenAI-compatible service. |
-| `semantic_classifier_model` | `gpt-5.4-mini` | Model name sent to the classifier endpoint. |
+| `semantic_classifier_model` | `gpt-5.6-luna` | Model name sent to the classifier endpoint. |
 | `semantic_classifier_api_key` | `""` | Bearer token for the classifier endpoint. If omitted or empty, the plugin checks `CODEX_PROXY_API_KEY`, then `OPENAI_API_KEY`; if no key is available, it sends no `Authorization` header. Do not commit real keys. |
 | `semantic_classifier_timeout_seconds` | `8` | HTTP timeout for the classifier call. Values below 1 are clamped to 1 second. |
 | `semantic_classifier_min_confidence` | `0.75` | Minimum classifier confidence required before a semantic result is accepted. Lower-confidence results fall back to deterministic routing. |
@@ -216,7 +216,7 @@ Conservative semantic classifier via local OpenAI-compatible proxy:
 ```yaml
 semantic_classifier_enabled: true
 semantic_classifier_url: http://127.0.0.1:8080/v1/chat/completions
-semantic_classifier_model: gpt-5.4-mini
+semantic_classifier_model: gpt-5.6-luna
 # Export CODEX_PROXY_API_KEY instead of storing the key here:
 #   export CODEX_PROXY_API_KEY='...'
 semantic_classifier_timeout_seconds: 3
@@ -331,7 +331,7 @@ The live semantic classifier is optional and disabled by default. It posts a cha
 
 ```json
 {
-  "model": "gpt-5.4-mini",
+  "model": "gpt-5.6-luna",
   "messages": [
     {"role": "system", "content": "...routing instructions..."},
     {"role": "user", "content": "{...current_user_message/context JSON...}"}

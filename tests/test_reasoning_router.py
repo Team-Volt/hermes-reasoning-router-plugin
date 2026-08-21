@@ -735,7 +735,7 @@ def test_semantic_classifier_can_raise_ambiguous_short_request(monkeypatch):
 
     def fake_semantic_classifier(text, config):
         assert text == "Set this one please"
-        assert config["semantic_classifier_model"] == "gpt-5.4-mini"
+        assert config["semantic_classifier_model"] == "gpt-5.6-luna"
         return {
             "effort": "medium",
             "confidence": 0.91,

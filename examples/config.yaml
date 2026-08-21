@@ -47,7 +47,7 @@ pending_intent_ttl_minutes: 30
 # Disabled by default; deterministic guardrails still win when enabled.
 semantic_classifier_enabled: false
 semantic_classifier_url: http://127.0.0.1:8080/v1/chat/completions
-semantic_classifier_model: gpt-5.4-mini
+semantic_classifier_model: gpt-5.6-luna
 # Prefer CODEX_PROXY_API_KEY or OPENAI_API_KEY in the gateway environment over
 # storing a key here. Leave empty to use env vars, or omit the field entirely.
 semantic_classifier_api_key: ""
