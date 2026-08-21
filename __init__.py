@@ -48,7 +48,7 @@ DEFAULT_CONFIG = {
     # ambiguous low/default deterministic routes without replacing guardrails.
     "semantic_classifier_enabled": False,
     "semantic_classifier_url": "http://127.0.0.1:8080/v1/chat/completions",
-    "semantic_classifier_model": "gpt-5.4-mini",
+    "semantic_classifier_model": "gpt-5.6-luna",
     "semantic_classifier_api_key": "",
     "semantic_classifier_timeout_seconds": 8,
     "semantic_classifier_min_confidence": 0.75,
