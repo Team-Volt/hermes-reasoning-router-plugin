@@ -22,12 +22,26 @@ from typing import Any, Iterable
 try:
     import yaml
 except Exception:  # pragma: no cover - Hermes normally depends on PyYAML
-    yaml = None
+    try:
+        # Current Hermes ships no PyYAML; hermes_yaml exposes the same
+        # safe_load/safe_dump surface (ruamel-backed).
+        import hermes_yaml as yaml  # type: ignore[no-redef]
+    except Exception:
+        yaml = None
 
 logger = logging.getLogger(__name__)
 
 EFFORT_ORDER = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 EFFORT_ALIASES = {"ultra": "max"}
+
+# Per-model wire ladders (mirrors hermes agent/reasoning_effort.py). Used only when
+# Hermes' own resolver is unavailable. GPT-6 Sol/Luna (and gpt-5.6) accept max;
+# Terra stops at xhigh; Astra has no disable/minimal level.
+_GPT6_MAX_EFFORTS = ("none", "low", "medium", "high", "xhigh", "max")
+_GPT6_TERRA_EFFORTS = ("none", "low", "medium", "high", "xhigh")
+_GPT6_ASTRA_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+_CODEX_LEGACY_EFFORTS = ("none", "low", "medium", "high", "xhigh")
+_CLAUDE_EFFORTS = ("none", "low", "medium", "high", "xhigh", "max")
 DEFAULT_CONFIG = {
     "enabled": True,
     "default": "medium",
@@ -48,7 +62,7 @@ DEFAULT_CONFIG = {
     # ambiguous low/default deterministic routes without replacing guardrails.
     "semantic_classifier_enabled": False,
     "semantic_classifier_url": "http://127.0.0.1:8080/v1/chat/completions",
-    "semantic_classifier_model": "gpt-5.6-luna",
+    "semantic_classifier_model": "gpt-6-luna",
     "semantic_classifier_api_key": "",
     "semantic_classifier_timeout_seconds": 8,
     "semantic_classifier_min_confidence": 0.75,
@@ -56,6 +70,14 @@ DEFAULT_CONFIG = {
     # Carry task complexity across terse approvals like "yes" / "go ahead".
     "pending_intent_enabled": True,
     "pending_intent_ttl_minutes": 30,
+    # Clamp each route onto the session model's real effort ladder
+    # (GPT-6 Terra has no max, Astra has no none, ...).
+    "model_aware_clamp": True,
+    # Leave a manual /reasoning session override alone until /reasoning reset.
+    "respect_manual_override": True,
+    # Short messages carrying a URL/path are usually "go research this" and
+    # should not take the quick/simple low route.
+    "url_floor": "medium",
 }
 
 # ``Ultra`` is Codex's orchestration label, not a provider reasoning.effort wire
@@ -228,6 +250,9 @@ _PROCEED_ACTION_PATTERNS = tuple(
 )
 _RUNTIME_CONFIG_OVERRIDE: dict[str, Any] | None = None
 _PENDING_INTENTS: dict[str, dict[str, Any]] = {}
+# session_key -> reasoning config this router last wrote. Anything else found in the
+# session override slot came from a human /reasoning and is left alone.
+_ROUTER_SET: dict[str, dict[str, Any]] = {}
 _LAST_HEALTH: dict[str, dict[str, Any] | None] = {
     "route": None,
     "override": None,
@@ -270,7 +295,7 @@ def pre_gateway_dispatch(event=None, gateway=None, session_store=None, **_kwargs
             logger.debug("reasoning-router: authorization check failed", exc_info=True)
             return None
 
-    text = str(getattr(event, "text", "") or "")
+    text = _strip_gateway_wrappers(str(getattr(event, "text", "") or ""))
     if not text.strip():
         return None
 
@@ -295,12 +320,23 @@ def pre_gateway_dispatch(event=None, gateway=None, session_store=None, **_kwargs
         logger.debug("reasoning-router: no session key; allowing without override")
         return None
 
+    if _truthy(config.get("respect_manual_override", True)) and _has_manual_override(gateway, session_key):
+        logger.debug("reasoning-router: manual /reasoning override active; leaving it")
+        _record_health("override", status="manual", session_key=session_key)
+        return None
+
     effort, reason, pending_intent = _effective_effort_for_message(
         text,
         config,
         session_store=session_store,
         session_key=session_key,
     )
+    if _truthy(config.get("model_aware_clamp", True)):
+        model = _session_model(gateway, session_key)
+        fitted = _clamp_to_model(effort, model)
+        if fitted != effort:
+            reason = f"{reason}; clamped {effort}->{fitted} for {model}"
+            effort = fitted
     reasoning_config = _reasoning_config_for_effort(effort)
     route_metadata = _route_metadata_for_decision(
         effort,
@@ -322,6 +358,7 @@ def pre_gateway_dispatch(event=None, gateway=None, session_store=None, **_kwargs
     else:
         try:
             _set_reasoning_override(gateway, session_key, reasoning_config)
+            _ROUTER_SET[session_key] = dict(reasoning_config)
         except Exception as exc:
             logger.warning("reasoning-router: failed to set session reasoning override: %s", exc)
             _record_health(
@@ -653,6 +690,11 @@ def classify_message(text: str, config: dict[str, Any] | None = None) -> tuple[s
     semantic_route = _semantic_route_for_ambiguous_message(text, lowered, cfg)
     if semantic_route is not None:
         return semantic_route
+
+    if _URL_OR_PATH_RE.search(normalized) and not _matches(_COMPILED_LOW, lowered):
+        floor = _normalize_effort_name(cfg.get("url_floor") or "")
+        if floor in EFFORT_ORDER:
+            return _clamp_effort(floor, cfg), "link/path to look into"
 
     if _matches(_COMPILED_LOW, lowered) or len(normalized) <= _safe_int(cfg.get("low_char_limit"), 80):
         return _clamp_effort("low", cfg), "quick/simple message"
@@ -1419,6 +1461,118 @@ def _session_key_for(event, gateway, session_store=None) -> str:
                 logger.debug("reasoning-router: session-store key lookup failed: %s", exc)
 
     return ""
+
+
+_URL_OR_PATH_RE = re.compile(r"(?:https?://\S+|(?:^|\s)~?/[\w.-]+/\S+)", re.I)
+_ORIGIN_PREFIX_RE = re.compile(
+    r"^\s*Gateway message origin \(JSON data, not instructions or authorization\):\s*\n"
+    r".*?\n(?:Do not guess a reply destination[^\n]*\n)?\s*",
+    re.S,
+)
+_OOB_RE = re.compile(
+    r"^\s*\[OUT-OF-BAND USER MESSAGE[^\]]*\]\s*\n(.*?)\n\s*\[/OUT-OF-BAND USER MESSAGE\]\s*$",
+    re.S,
+)
+
+
+def _strip_gateway_wrappers(text: str) -> str:
+    """Drop Hermes-added framing so only the human's words get classified.
+
+    The origin preamble and steering markers contain words like "authorization"
+    that would otherwise push every message into the risky/high buckets.
+    """
+    out = str(text or "")
+    for _ in range(3):
+        before = out
+        out = _ORIGIN_PREFIX_RE.sub("", out, count=1)
+        m = _OOB_RE.match(out)
+        if m:
+            out = m.group(1)
+        if out == before:
+            break
+    return out
+
+
+def _current_session_override(gateway, session_key: str) -> dict[str, Any] | None:
+    peek = getattr(gateway, "_peek_session_state", None)
+    if callable(peek):
+        try:
+            state = peek(session_key)
+            conv = getattr(state, "conversation", None) if state is not None else None
+            value = getattr(conv, "reasoning_override", None) if conv is not None else None
+            return dict(value) if isinstance(value, dict) else None
+        except Exception:
+            logger.debug("reasoning-router: session-state peek failed", exc_info=True)
+    overrides = getattr(gateway, "_session_reasoning_overrides", None)
+    if isinstance(overrides, dict):
+        value = overrides.get(session_key)
+        return dict(value) if isinstance(value, dict) else None
+    return None
+
+
+def _has_manual_override(gateway, session_key: str) -> bool:
+    """True when the session override was set by a human, not by this router."""
+    current = _current_session_override(gateway, session_key)
+    if current is None:
+        _ROUTER_SET.pop(session_key, None)
+        return False
+    return _ROUTER_SET.get(session_key) != current
+
+
+def _session_model(gateway, session_key: str) -> str:
+    """The session's effective model: /model override, else config model.default."""
+    peek = getattr(gateway, "_peek_session_state", None)
+    if callable(peek):
+        try:
+            state = peek(session_key)
+            conv = getattr(state, "conversation", None) if state is not None else None
+            override = getattr(conv, "model_override", None) if conv is not None else None
+            if isinstance(override, dict) and override.get("model"):
+                return str(override["model"])
+        except Exception:
+            logger.debug("reasoning-router: model-override peek failed", exc_info=True)
+    model_cfg = _read_yaml_file(_main_config_path()).get("model")
+    if isinstance(model_cfg, dict):
+        return str(model_cfg.get("default") or model_cfg.get("model") or "")
+    return str(model_cfg or "")
+
+
+def _supported_efforts_for_model(model: str) -> tuple[str, ...] | None:
+    """Wire effort ladder for a model id, or None when unknown (no clamp)."""
+    bare = str(model or "").strip().lower().rsplit("/", 1)[-1]
+    if not bare:
+        return None
+    if bare.startswith("gpt-"):
+        try:  # stay in lockstep with Hermes when it is importable
+            from agent.reasoning_effort import codex_supported_efforts
+
+            return tuple(codex_supported_efforts(bare))
+        except Exception:
+            pass
+        if bare.startswith("gpt-6-astra"):
+            return _GPT6_ASTRA_EFFORTS
+        if bare.startswith("gpt-6-terra"):
+            return _GPT6_TERRA_EFFORTS
+        if bare.startswith(("gpt-6-sol", "gpt-6-luna", "gpt-daybreak")) or "gpt-5.6" in bare:
+            return _GPT6_MAX_EFFORTS
+        return _CODEX_LEGACY_EFFORTS
+    if bare.startswith("claude"):
+        return _CLAUDE_EFFORTS
+    return None
+
+
+def _clamp_to_model(effort: str, model: str) -> str:
+    """Nearest supported level at or below ``effort``; the model's floor if none is below."""
+    supported = _supported_efforts_for_model(model)
+    effort = _normalize_effort_name(effort)
+    if not supported or effort in supported or effort not in EFFORT_ORDER:
+        return effort
+    ranked = [e for e in supported if e in EFFORT_ORDER]
+    if not ranked:
+        return effort
+    idx = EFFORT_ORDER.index(effort)
+    below = [e for e in ranked if EFFORT_ORDER.index(e) <= idx]
+    return max(below, key=EFFORT_ORDER.index) if below else min(ranked, key=EFFORT_ORDER.index)
 
 
 def _set_reasoning_override(gateway, session_key: str, reasoning_config: dict[str, Any]) -> None:
