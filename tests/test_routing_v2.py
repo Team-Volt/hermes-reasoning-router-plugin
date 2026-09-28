@@ -273,3 +273,24 @@ def test_yaml_reads_are_cached_until_the_file_changes(tmp_path, monkeypatch):
     assert len(calls) == 1
     path.write_text("a: 22\n")
     assert plugin._read_yaml_file(path) == {"a": 22}
+
+
+def test_profile_scoped_auth_check_is_preferred():
+    plugin = load_plugin()
+    gateway = StatefulGateway()
+    seen = []
+    gateway._is_user_authorized_for_source = lambda source: seen.append("scoped") or False
+    plugin.pre_gateway_dispatch(event("fix the deploy script"), gateway=gateway, session_store=None)
+    assert seen == ["scoped"]
+    assert gateway.calls == []
+
+
+def test_expired_state_is_swept_on_post_llm_call():
+    plugin = load_plugin()
+    old = datetime.now(UTC) - timedelta(days=1)
+    plugin._MOMENTUM["dead-session"] = {"tools": 30, "at": old}
+    plugin._PENDING_INTENTS["dead-session"] = {"effort": "high", "expires_at": old.isoformat()}
+    plugin.post_llm_call(session_id="live", user_message="hi", assistant_response="hello",
+                         conversation_history=[], platform="discord")
+    assert "dead-session" not in plugin._MOMENTUM
+    assert "dead-session" not in plugin._PENDING_INTENTS

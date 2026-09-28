@@ -282,6 +282,21 @@ _LAST_HEALTH: dict[str, dict[str, Any] | None] = {
 }
 
 
+def _sweep_stale_state(config: dict[str, Any]) -> None:
+    """Drop expired pending intents and momentum so rolled session ids don't pile up."""
+    try:
+        for sid in list(_PENDING_INTENTS):
+            _active_pending_intent(sid, config)  # pops expired/consumed entries
+        ttl = max(1, _safe_int(config.get("momentum_ttl_minutes"), DEFAULT_CONFIG["momentum_ttl_minutes"]))
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=ttl)
+        for sid, state in list(_MOMENTUM.items()):
+            at = state.get("at") if isinstance(state, dict) else None
+            if not isinstance(at, datetime) or at < cutoff:
+                _MOMENTUM.pop(sid, None)
+    except Exception:
+        logger.debug("reasoning-router: state sweep failed", exc_info=True)
+
+
 def register(ctx) -> None:
     ctx.register_hook("pre_gateway_dispatch", pre_gateway_dispatch)
     ctx.register_hook("post_llm_call", post_llm_call)
@@ -308,7 +323,11 @@ def pre_gateway_dispatch(event=None, gateway=None, session_store=None, **_kwargs
 
     # Gateway dispatch runs plugin hooks before central authorization. Avoid
     # creating overrides, pending-intent changes, or logs for rejected senders.
-    auth_fn = getattr(gateway, "_is_user_authorized", None)
+    # Prefer the profile-scoped check the gateway itself uses; fall back to the
+    # plain one on older hosts.
+    auth_fn = getattr(gateway, "_is_user_authorized_for_source", None)
+    if not callable(auth_fn):
+        auth_fn = getattr(gateway, "_is_user_authorized", None)
     if callable(auth_fn):
         try:
             if not auth_fn(getattr(event, "source", None)):
@@ -482,6 +501,7 @@ def post_llm_call(
     if _CONFIG_ERROR or not _truthy(config.get("enabled", True)):
         return None
 
+    _sweep_stale_state(config)
     _record_momentum(sid, conversation_history, config)
 
     if not _truthy(config.get("pending_intent_enabled", True)):

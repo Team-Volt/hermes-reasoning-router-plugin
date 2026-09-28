@@ -43,6 +43,19 @@ xhigh_high_match_threshold: 4
 pending_intent_enabled: true
 pending_intent_ttl_minutes: 30
 
+# Session momentum: terse follow-ups ("continue", "still broken") after a
+# tool-heavy turn get a floor instead of routing low. Closers stay low.
+momentum_enabled: true
+momentum_ttl_minutes: 45
+momentum_min_tool_calls: 5     # previous turn >= this -> at least medium
+momentum_heavy_tool_calls: 15  # previous turn >= this -> at least high
+
+# Floors for short messages that would otherwise look "simple" by length.
+# Set any of these to "" to disable.
+troubleshoot_floor: medium   # "the app keeps crashing"
+research_floor: medium       # "which is better, x or y"
+live_lookup_floor: medium    # "did the backup run?"
+
 # Optional OpenAI-compatible semantic classifier for ambiguous cases only.
 # Disabled by default; deterministic guardrails still win when enabled.
 semantic_classifier_enabled: false

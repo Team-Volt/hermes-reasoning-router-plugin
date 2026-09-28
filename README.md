@@ -180,6 +180,21 @@ Config fields:
 | `model_aware_clamp` | `true` | Clamp each route onto the session model's real effort ladder (for example `gpt-6-terra` caps at `xhigh`, `gpt-6-astra` floors at `low`). Uses Hermes' own `codex_supported_efforts` when importable. |
 | `respect_manual_override` | `true` | Leave a human `/reasoning <level>` session override alone until `/reasoning reset`. The router only replaces overrides it wrote itself. |
 | `url_floor` | `medium` | Minimum effort for a short message that carries a URL or file path (unless it is clearly an acknowledgement). Set to an empty string to disable. |
+| `momentum_enabled` | `true` | Give terse follow-ups ("continue", "same for the other one", "still broken") a floor when the previous turn in the session was tool-heavy. Closers like "thanks" are never raised. |
+| `momentum_ttl_minutes` | `45` | How long a heavy turn keeps influencing follow-ups. |
+| `momentum_min_tool_calls` | `5` | Tool calls in the previous turn needed before a follow-up gets at least `medium`. |
+| `momentum_heavy_tool_calls` | `15` | Tool calls in the previous turn needed before a follow-up gets `high`. |
+| `troubleshoot_floor` | `medium` | Minimum effort for a short "something is broken" report. Empty string disables. |
+| `research_floor` | `medium` | Minimum effort for a short compare, recommend, or "look into" request. Empty string disables. |
+| `live_lookup_floor` | `medium` | Minimum effort for a short live-status question ("is the backup done?") that needs a tool call. Empty string disables. |
+
+If the config file exists but cannot be parsed (bad YAML, or no YAML parser available), the router logs a warning and leaves reasoning alone instead of routing with defaults.
+
+Things to know:
+
+- The router works through Hermes' per-session reasoning override. That override beats both `agent.reasoning_effort` and per-model `agent.reasoning_overrides`, so while the router is on for a platform it decides effort there. A `/reasoning <level>` in a session is always respected until `/reasoning reset`. `/reasoning <level> --global` clears the session override, so the router picks again on the next message.
+- `pre_gateway_dispatch` runs inline on the gateway loop. With `semantic_classifier_enabled: true`, an ambiguous message waits on the classifier for up to `semantic_classifier_timeout_seconds`. Keep that timeout short, or point the classifier at something local.
+- Voice notes and attachment-only messages arrive with empty text and are not routed. Messages sent while a turn is already running go through Hermes' busy path, which does not call this hook.
 | `semantic_classifier_enabled` | `false` | Enables the optional OpenAI-compatible classifier for ambiguous cases only. Deterministic guardrails still win. |
 | `semantic_classifier_url` | `http://127.0.0.1:8080/v1/chat/completions` | Chat-completions endpoint used by the semantic classifier. Intended for a local codex-proxy/OpenAI-compatible service. |
 | `semantic_classifier_model` | `gpt-6-luna` | Model name sent to the classifier endpoint. |
