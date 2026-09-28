@@ -78,6 +78,22 @@ DEFAULT_CONFIG = {
     # Short messages carrying a URL/path are usually "go research this" and
     # should not take the quick/simple low route.
     "url_floor": "medium",
+    # Session momentum: a terse follow-up ("continue", "still broken", "same for
+    # the other one") right after a tool-heavy turn is part of that task, not
+    # small talk. Tool calls are counted from the turn Hermes just finished.
+    "momentum_enabled": True,
+    "momentum_ttl_minutes": 45,
+    "momentum_min_tool_calls": 5,
+    "momentum_heavy_tool_calls": 15,
+    # Effort floors for short messages that the length heuristic used to send to
+    # low: reports of something broken, research/compare asks, and status
+    # questions about a live system.
+    "troubleshoot_floor": "medium",
+    "research_floor": "medium",
+    "live_lookup_floor": "medium",
+    # Extra nouns (host names, app names) that mark a message as being about a
+    # live system. Merged with the built-in generic list.
+    "live_system_terms": [],
 }
 
 # ``Ultra`` is Codex's orchestration label, not a provider reasoning.effort wire
@@ -253,6 +269,12 @@ _PENDING_INTENTS: dict[str, dict[str, Any]] = {}
 # session_key -> reasoning config this router last wrote. Anything else found in the
 # session override slot came from a human /reasoning and is left alone.
 _ROUTER_SET: dict[str, dict[str, Any]] = {}
+# Per-session record of the last finished turn (tool calls, time). Lets a terse
+# follow-up inherit the weight of the task it continues.
+_MOMENTUM: dict[str, dict[str, Any]] = {}
+# Set when a config file exists but cannot be parsed. Routing from defaults in
+# that state would silently ignore the user's clamps and platform list.
+_CONFIG_ERROR: str | None = None
 _LAST_HEALTH: dict[str, dict[str, Any] | None] = {
     "route": None,
     "override": None,
@@ -302,17 +324,31 @@ def pre_gateway_dispatch(event=None, gateway=None, session_store=None, **_kwargs
     # Built-in/plugin slash commands should keep their own semantics. In
     # particular, /reasoning must be able to set manual state without us racing
     # it from the pre-dispatch hook.
-    if text.lstrip().startswith("/"):
+    if _looks_like_slash_command(text):
+        if _is_reasoning_slash_command(text):
+            # Whatever /reasoning sets next is the human's, even when it equals
+            # the value the router had picked.
+            key = _session_key_for(event, gateway, session_store)
+            if key:
+                _router_set_map(gateway).pop(key, None)
         if not _slash_command_preserves_pending(text):
             _consume_pending_intent_for_event(event, gateway, session_store)
         return None
 
     config = _router_config(gateway)
+    if _CONFIG_ERROR:
+        logger.warning("reasoning-router: not routing; %s", _CONFIG_ERROR)
+        _record_health("config", status="unreadable", error=_CONFIG_ERROR)
+        return None
     if not _truthy(config.get("enabled", True)):
+        # Turning the router off must not leave its last pick (possibly
+        # low/none) pinned on the session.
+        _release_router_override(gateway, _session_key_for(event, gateway, session_store))
         return None
 
     if not _platform_enabled(event, config):
         logger.debug("reasoning-router: platform not enabled; allowing without override")
+        _release_router_override(gateway, _session_key_for(event, gateway, session_store))
         return None
 
     session_key = _session_key_for(event, gateway, session_store)
@@ -349,6 +385,9 @@ def pre_gateway_dispatch(event=None, gateway=None, session_store=None, **_kwargs
 
     if shadow_mode:
         override_applied = False
+        # Shadow mode logs only; a pick left over from live mode would keep
+        # steering the model while the log claims nothing was applied.
+        _release_router_override(gateway, session_key)
         _record_health(
             "override",
             status="shadow",
@@ -358,7 +397,7 @@ def pre_gateway_dispatch(event=None, gateway=None, session_store=None, **_kwargs
     else:
         try:
             _set_reasoning_override(gateway, session_key, reasoning_config)
-            _ROUTER_SET[session_key] = dict(reasoning_config)
+            _router_set_map(gateway)[session_key] = dict(reasoning_config)
         except Exception as exc:
             logger.warning("reasoning-router: failed to set session reasoning override: %s", exc)
             _record_health(
@@ -440,8 +479,11 @@ def post_llm_call(
         return None
 
     config = _read_router_config_from_disk()
-    if not _truthy(config.get("enabled", True)):
+    if _CONFIG_ERROR or not _truthy(config.get("enabled", True)):
         return None
+
+    _record_momentum(sid, conversation_history, config)
+
     if not _truthy(config.get("pending_intent_enabled", True)):
         _PENDING_INTENTS.pop(sid, None)
         return None
@@ -596,8 +638,40 @@ def reasoning_router_command(raw_args: str = "") -> str:
 
 def classify_message(text: str, config: dict[str, Any] | None = None) -> tuple[str, str]:
     cfg = {**DEFAULT_CONFIG, **(config or {})}
-    normalized = " ".join(text.strip().split())
-    lowered = normalized.lower()
+    normalized = " ".join(str(text or "").strip().split())
+    lowered = _normalize_for_match(normalized)
+    # Keyword checks run on a masked copy so "tokens per second" or
+    # "permission denied" do not read as credential or access-control work.
+    risk_lowered = _risk_view(lowered)
+    effort, reason = _classify_core(text, normalized, lowered, risk_lowered, cfg)
+    return effort, reason
+
+
+def _classify_core(
+    text: str,
+    normalized: str,
+    lowered: str,
+    risk_lowered: str,
+    cfg: dict[str, Any],
+) -> tuple[str, str]:
+    if _EFFORT_WORD_RE.search(lowered) and not _is_simple_factual_question(lowered):
+        return _clamp_effort("xhigh", cfg), "explicit request for extra-high reasoning"
+
+    if _matches(_COMPILED_XHIGH_EXTRA, risk_lowered) and not _is_simple_factual_question(lowered):
+        if _is_pure_question(lowered) and not _is_imperative_request(lowered):
+            return _clamp_effort("high", cfg), "question about a fleet-wide/irreversible/production change"
+        return _clamp_effort("xhigh", cfg), "fleet-wide, irreversible, credential or production change"
+
+    return _classify_legacy(text, normalized, lowered, risk_lowered, cfg)
+
+
+def _classify_legacy(
+    text: str,
+    normalized: str,
+    lowered: str,
+    risk_lowered: str,
+    cfg: dict[str, Any],
+) -> tuple[str, str]:
 
     # Strongest wins. Avoid low-routing a short sentence like "go ahead and set
     # up the automation" just because it is brief. Definition-style questions
@@ -620,7 +694,7 @@ def classify_message(text: str, config: dict[str, Any] | None = None) -> tuple[s
     # Question/clarification forms get one semantic pass so words like
     # "restart gateway" do not over-route when the user is only asking whether a
     # restart is needed.
-    if _matches(_COMPILED_XHIGH, lowered):
+    if _matches(_COMPILED_XHIGH, risk_lowered):
         if _is_question_or_clarification(lowered):
             semantic_route = _semantic_route_for_ambiguous_message(
                 text,
@@ -634,10 +708,10 @@ def classify_message(text: str, config: dict[str, Any] | None = None) -> tuple[s
                 return semantic_route
         return _clamp_effort("xhigh", cfg), "matched xhigh complexity/risk keywords"
 
-    if _matches(_COMPILED_IMPLEMENTATION_APPROVAL, lowered):
+    if _matches(_COMPILED_IMPLEMENTATION_APPROVAL, risk_lowered):
         return _clamp_effort("high", cfg), "matched implementation approval/tweak request"
 
-    high_groups = _matched_high_groups(lowered)
+    high_groups = _matched_high_groups(risk_lowered)
     threshold = _safe_int(cfg.get("xhigh_high_match_threshold"), DEFAULT_CONFIG["xhigh_high_match_threshold"])
     if len(high_groups) >= threshold:
         baseline_reason = f"matched multiple high-complexity categories: {', '.join(high_groups)}"
@@ -656,6 +730,9 @@ def classify_message(text: str, config: dict[str, Any] | None = None) -> tuple[s
             _clamp_effort("xhigh", cfg),
             baseline_reason,
         )
+
+    if high_groups and _is_short_status_question(lowered, cfg):
+        return _clamp_effort("medium", cfg), f"question touching {', '.join(high_groups)}"
 
     if high_groups:
         baseline_reason = f"matched high-complexity category: {', '.join(high_groups)}"
@@ -696,8 +773,9 @@ def classify_message(text: str, config: dict[str, Any] | None = None) -> tuple[s
         if floor in EFFORT_ORDER:
             return _clamp_effort(floor, cfg), "link/path to look into"
 
-    if _matches(_COMPILED_LOW, lowered) or len(normalized) <= _safe_int(cfg.get("low_char_limit"), 80):
-        return _clamp_effort("low", cfg), "quick/simple message"
+    short_route = _route_short_or_plain(normalized, lowered, cfg)
+    if short_route is not None:
+        return short_route
 
     if _matches(_COMPILED_MEDIUM, lowered):
         return _clamp_effort("medium", cfg), "matched normal tool/status keywords"
@@ -706,6 +784,51 @@ def classify_message(text: str, config: dict[str, Any] | None = None) -> tuple[s
     if default not in EFFORT_ORDER:
         default = DEFAULT_CONFIG["default"]
     return _clamp_effort(default, cfg), "default route"
+
+
+def _route_short_or_plain(normalized: str, lowered: str, cfg: dict[str, Any]) -> tuple[str, str] | None:
+    """Decide messages no keyword category claimed.
+
+    Signals checked before length: troubleshooting, research/compare, live
+    status lookups, and short imperatives. Length only decides when none fire.
+    """
+    if _is_closer(lowered):
+        return _clamp_effort("low", cfg), "quick/simple message"
+
+    if any(pattern.search(lowered) for pattern in _COMPILED_PERSONAL_QUICK):
+        return _clamp_effort("low", cfg), "personal quick action"
+
+    troubleshooting = _matches(_COMPILED_TROUBLESHOOT, lowered)
+    research = _matches(_COMPILED_RESEARCH, lowered)
+    if troubleshooting and (research or _DESIGN_WORD_RE.search(lowered)):
+        return _clamp_effort("high", cfg), "troubleshooting that needs research or a design call"
+    if troubleshooting:
+        floored = _floor_effort("low", "troubleshoot_floor", cfg)
+        if floored:
+            return floored, "something is broken or misbehaving"
+    if research:
+        floored = _floor_effort("low", "research_floor", cfg)
+        if floored:
+            return floored, "research/compare/recommendation request"
+    if _DESIGN_WORD_RE.search(lowered):
+        return _clamp_effort("high", cfg), "architecture/design tradeoff"
+    if _is_live_lookup(lowered, cfg):
+        floored = _floor_effort("low", "live_lookup_floor", cfg)
+        if floored:
+            return floored, "status lookup on a live system"
+    if _is_imperative_request(lowered):
+        if _BUILD_ARTIFACT_RE.search(_strip_request_prefix(lowered)):
+            return _clamp_effort("high", cfg), "request to write or build something new"
+        if _mentions_live_system(lowered, cfg) or len(normalized) > 40:
+            return _clamp_effort("medium", cfg), "short request to change or build something"
+    if _OPTION_PICK_RE.match(lowered):
+        return _clamp_effort("medium", cfg), "picked one of the offered options"
+    if _BARE_CONTINUE_RE.match(lowered):
+        return _clamp_effort("medium", cfg), "continue the current task"
+
+    if _matches(_COMPILED_LOW, lowered) or len(normalized) <= _safe_int(cfg.get("low_char_limit"), 80):
+        return _clamp_effort("low", cfg), "quick/simple message"
+    return None
 
 
 def _semantic_route_for_ambiguous_message(
@@ -959,6 +1082,7 @@ def _effective_effort_for_message(
                 route_config["last_assistant_intent"] = last_assistant[:500]
 
     effort, reason = classify_message(text, route_config)
+    effort, reason = _apply_momentum(text, effort, reason, session_id, config)
     if not _truthy(config.get("pending_intent_enabled", True)):
         return effort, reason, None
 
@@ -982,6 +1106,84 @@ def _effective_effort_for_message(
     # stale context.
     _consume_pending_intent(session_id)
     return effort, f"cleared pending task; {reason}", pending
+
+
+def _turn_tool_calls(conversation_history) -> int:
+    """Count tool calls made after the last user message in the finished turn."""
+    if not isinstance(conversation_history, (list, tuple)):
+        return 0
+    count = 0
+    for message in reversed(conversation_history):
+        if not isinstance(message, dict):
+            continue
+        role = message.get("role")
+        if role == "user":
+            break
+        if role == "assistant":
+            calls = message.get("tool_calls")
+            if isinstance(calls, (list, tuple)):
+                count += len(calls)
+    return count
+
+
+def _record_momentum(session_id: str, conversation_history, config: dict[str, Any]) -> None:
+    if not _truthy(config.get("momentum_enabled", True)):
+        _MOMENTUM.pop(session_id, None)
+        return
+    _MOMENTUM[session_id] = {
+        "tool_calls": _turn_tool_calls(conversation_history),
+        "at": datetime.now(timezone.utc),
+    }
+    if len(_MOMENTUM) > 512:
+        oldest = sorted(_MOMENTUM, key=lambda key: _MOMENTUM[key]["at"])[: len(_MOMENTUM) - 512]
+        for key in oldest:
+            _MOMENTUM.pop(key, None)
+
+
+_CONTINUE_RE = re.compile(
+    r"^(?:(?:ok(?:ay)?|yes|yeah|yep|sure|cool|great|nice|perfect|alright)[,.!\s]+)?(?:please\s+)?"
+    r"(?:continue|keep\s+going|go\s+on|carry\s+on|proceed|go\s+ahead|do\s+it|finish(?:\s+it)?|resume|"
+    r"try\s+again|retry|again|next|and\s+now|same|still|also|what\s+about|now\s+(?:do|try|check|fix))\b",
+    re.I,
+)
+
+
+def _apply_momentum(
+    text: str,
+    effort: str,
+    reason: str,
+    session_id: str,
+    config: dict[str, Any],
+) -> tuple[str, str]:
+    """Raise short follow-ups that continue a tool-heavy turn.
+
+    Only lifts efforts below the floor and never touches closers ("thanks",
+    "lol") or rejections, so a finished task does not keep costing effort.
+    """
+    if not session_id or not _truthy(config.get("momentum_enabled", True)):
+        return effort, reason
+    state = _MOMENTUM.get(session_id)
+    if not state:
+        return effort, reason
+    ttl = max(1, _safe_int(config.get("momentum_ttl_minutes"), DEFAULT_CONFIG["momentum_ttl_minutes"]))
+    if datetime.now(timezone.utc) - state["at"] > timedelta(minutes=ttl):
+        _MOMENTUM.pop(session_id, None)
+        return effort, reason
+    tools = _safe_int(state.get("tool_calls"), 0)
+    min_tools = _safe_int(config.get("momentum_min_tool_calls"), DEFAULT_CONFIG["momentum_min_tool_calls"])
+    if tools < max(1, min_tools):
+        return effort, reason
+    lowered = _normalize_for_match(text)
+    if _is_closer(lowered) or _is_rejection(text):
+        return effort, reason
+    if EFFORT_ORDER.index(effort) >= EFFORT_ORDER.index("high"):
+        return effort, reason
+    heavy = _safe_int(config.get("momentum_heavy_tool_calls"), DEFAULT_CONFIG["momentum_heavy_tool_calls"])
+    floor = "high" if tools >= heavy and (_CONTINUE_RE.match(lowered) or _is_affirmative(text)) else "medium"
+    lifted = _max_effort((effort, floor), config)
+    if lifted == effort:
+        return effort, reason
+    return lifted, f"follow-up to a {tools}-tool-call turn ({reason})"
 
 
 def _recent_messages_for_session(session_id: str, limit: int = 3) -> list[dict[str, str]]:
@@ -1115,11 +1317,326 @@ def _is_simple_factual_question(lowered: str) -> bool:
     text = str(lowered or "").strip()
     if not text:
         return False
+    if re.match(r"^(?:what\s+does|what'?s|whats)\s+[\w .'-]{1,40}\s+(?:mean|stand\s+for)\b", text) or re.match(
+        r"^define\s+\S", text
+    ):
+        return len(text) <= 120
     if not re.match(r"^(?:what|who|when|where)\s+(?:is|are|was|were)\b", text):
         return False
     if re.search(r"\b(?:fix|debug|implement|build|change|modify|configure|deploy|restart|delete|remove|migrate|patch|update|review|audit|secure|rotate)\b", text):
         return False
+    # "what are people using for X", "what is wrong with Y", "what is running
+    # on the server" need research, diagnosis or a live check, not recall.
+    if _matches(_COMPILED_RESEARCH, text) or _matches(_COMPILED_TROUBLESHOOT, text):
+        return False
+    if _is_live_lookup(text, None):
+        return False
     return len(text) <= 120
+
+
+# ---------------------------------------------------------------------------
+# Short-message understanding
+#
+# The original fallback sent every message under ``low_char_limit`` to low.
+# Replaying real chat history showed that short messages are often the most
+# expensive ones: "still broken", "continue", "why is plex buffering",
+# "rotate the api keys across the fleet". The helpers below recognise those
+# shapes so length only decides the route when nothing else does.
+# ---------------------------------------------------------------------------
+
+_REQUEST_PREFIX_RE = re.compile(
+    r"^(?:(?:ok(?:ay)?|k|so|and|also|now|then|alright|hey|yo|pls|please|plz|kindly|"
+    r"can|could|would|will|may)\b[\s,]*"
+    r"|(?:can|could|would|will|may)\s+(?:you|u|we|ya)\b(?:\s+please)?[\s,]*"
+    r"|(?:let'?s|lets|let\s+us)\b[\s,]*"
+    r"|i\s+(?:want|need|would\s+like|'?d\s+like|wanna)\s+(?:you\s+|u\s+)?(?:to\s+)?"
+    r"|go\s+ahead\s+and\s+|time\s+to\s+|help\s+me\s+|try\s+to\s+)+",
+    re.I,
+)
+
+_IMPERATIVE_VERB_RE = re.compile(
+    r"^(?:write|make|add|create|build|set\s*up|setup|schedule|script|rename|de-?dupe|bump|"
+    r"redeploy|deploy|install|reinstall|uninstall|configure|reconfigure|enable|disable|change|"
+    r"update|upgrade|downgrade|move|migrate|convert|generate|automate|hook\s+up|wire\s+up|"
+    r"implement|refactor|patch|fix|repair|register|remove|delete|clean\s*up|cleanup|switch|"
+    r"replace|merge|commit|push|restart|reboot|start|stop|revert|roll\s*back|rollback|apply|"
+    r"integrate|turn\s+(?:on|off)|rewrite|redo|rebuild|port|backfill|sync|import|export|"
+    r"prune|purge|rotate|expose|lock\s+down|harden|optimi[sz]e|tune|speed\s+up|clone|fork|"
+    r"release|publish|ship|wire|connect|mount|point|route|forward|allow|block|grant|revoke|"
+    r"get\s+(?:the|a|an|me|us)|download|organi[sz]e|dedupe|backup|back\s+up|restore|"
+    r"schedule|test|retest|benchmark|debug|troubleshoot|investigate|diagnose|audit|review)\b",
+    re.I,
+)
+
+# Personal quick actions that sound like implementation but are one tool call.
+_PERSONAL_QUICK_PATTERNS = (
+    r"^(?:please\s+)?(?:add|put)\b.{0,60}\bto\s+(?:my|the)\s+(?:grocery|shopping|todo|to-do|to\s+do|packing)\s+list\b",
+    r"^(?:please\s+)?remind\s+me\b(?!.{0,80}\bevery\b)",
+    r"^(?:please\s+)?(?:text|message|tell|call)\s+(?:my\s+)?(?:wife|husband|mom|dad|partner)\b",
+)
+
+_CLOSER_WORDS = frozenset(
+    """thanks thank you so much ty thx tysm cheers lol haha hah heh lmao lmfao rofl nice cool
+    sweet great perfect awesome amazing wow yay love it that worked works working got
+    good all sounds appreciate appreciated legend beautiful brilliant excellent neat
+    man dude bro buddy nerd one oh ah ahh ahhh okay ok k yeah yep nice gg gn night goodnight
+    morning gm hi hey hello sup yo hiii hii there you""".split()
+)
+_CLOSER_CORE_WORDS = frozenset(
+    """thanks thank ty thx tysm cheers lol haha hah heh lmao lmfao rofl nice cool sweet great
+    perfect awesome amazing wow yay love worked appreciate appreciated legend beautiful
+    brilliant excellent neat gg gn night goodnight morning gm hi hey hello sup yo hiii hii""".split()
+)
+
+# Terse replies that continue whatever the session was doing.
+_CONTINUATION_RE = re.compile(
+    r"^(?:(?:and|ok(?:ay)?|k|yes|yeah|yep|now|so|alright|please|pls)[,\s]+)*"
+    r"(?:continue|keep\s+going|go\s+on|carry\s+on|proceed|resume|go\s+ahead|go\s+for\s+it|"
+    r"do\s+it(?:\s+all)?|do\s+(?:all|both|them|those)|yes|y|yep|yeah|yea|yup|sure|affirmative|"
+    r"try\s+(?:it\s+|that\s+)?again|retry|again|run\s+it(?:\s+again)?|retest|re-?run|next|"
+    r"and\s+then\??|then\s+what\??|ship\s+it|apply\s+it|push\s+it|finish\s+(?:it|up)|"
+    r"\d{1,2}[.)]?|option\s+\d+|all\s+of\s+(?:them|those|it)|both|all|"
+    r"same(?:\b.*)?|still\b.*|nope?\b.*\bstill\b.*|(?:that\s+)?(?:didn'?t|did\s+not|doesn'?t)\s+work.*|"
+    r"not\s+working.*|check\s+again|do\s+the\s+same\b.*|the\s+other\s+one.*|now\s+the\b.*|"
+    r"what\s+about\s+the\b.*|and\s+the\b.*)"
+    r"[.!?\s]*$",
+    re.I,
+)
+
+_TROUBLESHOOT_PATTERNS = (
+    r"\b(?:isn'?t|aren'?t|wasn'?t|not|never|won'?t|wont|can'?t|cant|cannot|doesn'?t|didn'?t|didnt|doesnt|isnt|arent)\s+"
+    r"(?:\w+\s+){0,2}(?:work|working|load|loading|respond|responding|show|showing|showin|online|up|playing|play|"
+    r"import|importing|resolve|resolving|fire|firing|run|running|start|starting|connect|connecting|sync|syncing|"
+    r"send|sending|go\s+off|reachable|picking\s+up|pick\s+up|turn\s+on|boot|booting|update|updating|save|saving|"
+    r"open|opening|download|downloading|reply|replying|load)\b",
+    r"\b(?:keeps?|kept)\s+(?:on\s+)?(?:restarting|crashing|buffering|climbing|failing|dropping|disconnecting|"
+    r"timing\s+out|freezing|hanging|looping|stuttering|rebooting|going\s+down|dying|erroring)\b",
+    r"\b(?:offline|broken|broke|failing|failed|errors?|erroring|stuck|stalls?|stalled|stalling|hangs?|hanging|"
+    r"frozen|freezing|crash(?:es|ed|ing)?|buffering|stutter(?:s|ing)?|laggy|lagging|slow|timed?\s*out|timeout|"
+    r"disconnected|unreachable|unavailable|refused|denied|500|502|503|504|404|oom|leak(?:ing)?|corrupt(?:ed)?|"
+    r"missing|vanished|disappeared|went\s+away|blurred|blurry|glitch(?:y|ing)?|not\s+found|no\s+longer)\b",
+    r"\b(?:twice|double[ds]?|duplicat(?:e|es|ed|ing)|every\s+(?:message|time)\s+now|out\s+of\s+sync|wrong\s+"
+    r"(?:time|date|language|audio|subtitles?|user|account|order)|says\s+no\b|won'?t\s+stop|keeps?\s+(?:asking|saying|"
+    r"showing|sending|posting|replying))\b",
+    r"\b(?:why\s+(?:is|are|does|do|did|was|were|isn'?t|won'?t|can'?t|would|has|have|this|it|the|my|our)|"
+    r"what'?s\s+(?:wrong|going\s+on|broken|happening|up\s+with)|whats\s+(?:wrong|going\s+on|broken|happening|up\s+with)|"
+    r"what\s+(?:is|went)\s+wrong|any\s+idea\s+why|how\s+come|what\s+happened)\b",
+)
+
+_RESEARCH_PATTERNS = (
+    r"\b(?:compare|comparison|comparing|vs\.?|versus|pros\s+and\s+cons|worth\s+it|is\s+it\s+worth|"
+    r"worth\s+(?:switching|moving|upgrading|getting|buying|it)|which\s+(?:\w+\s+){0,2}(?:is|would\s+be)\s+better|"
+    r"what'?s\s+better|whats\s+better|what\s+is\s+better|best\s+(?:way|option|approach|practice|tool|setup)|"
+    r"alternatives?\s+(?:to|for)|options?\s+for|look\s+into|looking\s+into|look\s+up|research|recommend(?:ation)?s?|"
+    r"should\s+(?:i|we)\s+(?:use|go|switch|try|move|get|buy|pick|stick|keep|run|choose)|"
+    r"difference\s+between|what\s+would\s+it\s+take|opinion|thoughts\s+on|your\s+take|summari[sz]e|"
+    r"what\s+changed|how\s+does\b.{0,60}\bcompare|what\s+are\s+(?:people|folks|others)\s+using|"
+    r"is\s+it\s+safe|is\s+(?:it|that|this)\s+(?:a\s+good\s+idea|smart|better|faster|worth)|"
+    r"read\s+(?:the|up\s+on)\b.{0,40}\b(?:docs?|documentation|changelog|release\s+notes)|"
+    r"any\s+(?:good\s+)?(?:alternatives?|options?|recommendations?)|how\s+(?:can|could|should|would)\s+(?:we|i)\b|"
+    r"what\s+(?:do|should|would)\s+(?:we|i|you)\s+(?:need|use|do|recommend|suggest))\b",
+)
+
+_LIVE_SYSTEM_TERMS = (
+    "server", "servers", "box", "host", "hosts", "nas", "container", "containers", "docker", "compose",
+    "service", "services", "cron", "crons", "backup", "backups", "disk", "disks", "drive", "cpu", "gpu",
+    "ram", "memory", "uptime", "port", "ports", "dns", "vpn", "node", "nodes", "queue", "bot", "bots",
+    "gateway", "proxy", "database", "db", "repo", "repos", "deploy", "deploys", "logs", "log", "cert",
+    "certs", "ssl", "tls", "network", "wifi", "router", "vm", "vms", "pool", "volume", "volumes",
+    "cluster", "pod", "pods", "site", "website", "domain", "subdomain", "api", "endpoint", "job", "jobs",
+    "pipeline", "build", "ci", "workflow", "tunnel", "firewall", "jellyfin", "plex", "emby", "sonarr",
+    "radarr", "lidarr", "prowlarr", "bazarr", "overseerr", "jellyseerr", "qbittorrent", "transmission",
+    "sabnzbd", "coolify", "tailscale", "wireguard", "home assistant", "homeassistant", "zigbee",
+    "traefik", "caddy", "nginx", "kubernetes", "k8s", "portainer", "proxmox", "unraid", "truenas",
+    "grafana", "prometheus", "uptime kuma", "pihole", "pi-hole", "adguard", "postgres", "mysql", "redis",
+    "hermes", "discord", "github", "gitlab", "cloudflare", "vercel",
+)
+
+_LIVE_LOOKUP_SHAPE_PATTERNS = (
+    r"^(?:is|are)\s+(?:the\s+|my\s+|our\s+)?[\w.-]+(?:\s+[\w.-]+){0,2}\s+(?:up|down|online|offline|running|working|"
+    r"healthy|reachable|back|alive|ok|okay|done|finished|synced|updated|full)\b",
+    r"^(?:did|has|have|was|were)\s+.{0,80}\b(?:finish|finished|run|ran|complete|completed|come\s+back|came\s+back|"
+    r"go\s+off|went\s+off|fire|fired|succeed|succeeded|work|worked|start|started|deploy|deployed|pass|passed|"
+    r"sync|synced|update|updated|import|imported|download|downloaded)\b",
+    r"\bhow\s+(?:much|many)\s+(?:\w+\s+){0,3}(?:space|disk|storage|ram|memory|cpu|free|left|used|running|"
+    r"movies|shows|series|episodes|containers|services|jobs|crons|items|files|users|errors)\b",
+    r"\b(?:uptime|cpu\s+temp|temperature|load\s+average|disk\s+usage|free\s+space|space\s+left|status)\b",
+    r"\b(?:what|which)\s+(?:\w+\s+)?(?:containers?|services?|apps?|jobs?|crons?|ports?|version|versions|"
+    r"models?|nodes?|hosts?|ips?|ip\s+address)\b",
+    r"\b(?:right\s+now|rn|currently|at\s+the\s+moment|atm|anything\s+running)\b",
+    r"^(?:show|list|check|tell)\s+(?:me\s+)?",
+)
+
+_XHIGH_EXTRA_PATTERNS = (
+    # fleet-wide changes
+    r"\b(?:every|all(?:\s+(?:the|of\s+the|my|our))?|each)\s+(?:\w+\s+)?(?:server|servers|host|hosts|machine|machines|"
+    r"node|nodes|box|boxes|service|services|container|containers|repo|repos|clone|clones|site|sites|vm|vms|device|"
+    r"devices|environment|environments)\b.{0,80}\b(?:rotate|reset|delete|remove|wipe|migrate|upgrade|update|restart|"
+    r"move|redeploy|prune|purge|rebuild|lock\s+down|replace|reinstall|cut|force|re-?key|patch)\b",
+    r"\b(?:rotate|reset|delete|remove|wipe|migrate|upgrade|restart|move|redeploy|prune|purge|rebuild|lock\s+down|"
+    r"replace|reinstall|re-?key|patch|update)\b.{0,100}\b(?:every|all|each|across)\s+(?:the\s+|of\s+the\s+|my\s+|our\s+)?"
+    r"(?:\w+\s+)?(?:fleet|servers?|hosts?|machines?|nodes?|box(?:es)?|services?|containers?|repos?|clones?|sites?|"
+    r"vms?|devices?|environments?)\b",
+    r"\b(?:across\s+(?:the\s+)?(?:fleet|all|every)|fleet[-\s]?wide|on\s+all\s+(?:the\s+)?hosts)\b",
+    # credential rotation / access changes / exposure
+    r"\brotate\b.{0,60}\b(?:keys?|secrets?|tokens?|credentials?|passwords?|certs?|certificates?)\b",
+    r"\b(?:give|grant)\b.{0,60}\b(?:write|admin|root|sudo|owner)\s+(?:access|permissions?|rights)\b",
+    r"\b(?:expose|open\s+up|make\s+public)\b.{0,60}\b(?:internet|public|wan|outside|world)\b",
+    # irreversible operations
+    r"\b(?:wipe|reformat|re-?format|format\s+the|factory\s+reset|rm\s+-rf|force[-\s]?push|drop\s+(?:the\s+)?"
+    r"(?:\w+\s+){0,2}(?:table|tables|database|db|schema)|truncate\s+(?:the\s+)?(?:\w+\s+)?table|rewrite\s+(?:the\s+)?"
+    r"(?:git\s+)?history)\b",
+    r"\b(?:delete|remove|purge|prune|wipe|nuke)\b.{0,40}\b(?:all|every|entire|whole)\b",
+    # production changes
+    r"\b(?:prod|production)\b.{0,60}\b(?:upgrade|migrate|migration|push|deploy|rebuild|delete|drop|restart|change|"
+    r"update|write|access|reset|move)\b",
+    r"\b(?:upgrade|migrate|migration|push|deploy|rebuild|delete|drop|restart|change|update|reset|move)\b.{0,80}"
+    r"\b(?:prod|production)\b",
+    # continuity demands
+    r"\b(?:zero[-\s]?downtime|cut\s*over|cutover|without\s+(?:any\s+)?(?:downtime|data\s+loss|losing|locking)|"
+    r"(?:dont|don'?t|do\s+not|without)\s+(?:lose|losing|lock(?:ing)?\s+(?:me|us)\s+out)|major\s+version|from\s+scratch)\b",
+)
+
+# Phrases that trip risk keywords without describing a risky action.
+_RISK_MASKS = (
+    (re.compile(r"\btokens?\s+(?:per\s+second|/s|per\s+sec|used|usage|count|counts|budget|limit|limits|in\b|out\b|spent|burned)"
+                r"|\b(?:how\s+many|input|output|total|context|prompt|completion|cached)\s+tokens?\b", re.I), "units"),
+    (re.compile(r"\bpermission\s+denied\b", re.I), "access error"),
+    (re.compile(r"\b(?:command|button|script|endpoint|shortcut|way|option|toggle)\s+(?:to|that|for)\s+"
+                r"(?:restart|stop|shut\s*down|reboot)", re.I), "control action"),
+    (re.compile(r"\b(?:my|our|the|this|your|current|whole|homelab|home)\s+setup\b", re.I), "the rig"),
+)
+
+_DESIGN_WORD_RE = re.compile(r"\b(?:architecture|architectural|design\s+decision|tradeoffs?|trade-offs?|strategy)\b", re.I)
+_EFFORT_WORD_RE = re.compile(r"\b(?:xhigh|extra\s*high|think\s+hard(?:er)?)\b", re.I)
+_QUESTION_START_RE = re.compile(
+    r"^(?:what|what'?s|whats|why|how|which|when|where|who|is|are|was|were|does|do|did|should|would|could|"
+    r"can\s+(?:i|it|this|that|they)|will\s+(?:it|this|that)|has|have|any|anything)\b",
+    re.I,
+)
+_REQUEST_QUESTION_RE = re.compile(
+    r"^(?:(?:can|could|would|will|may)\s+(?:you|u|we|ya)|let'?s|lets|please)\b",
+    re.I,
+)
+
+_COMPILED_TROUBLESHOOT = tuple(re.compile(p, re.I) for p in _TROUBLESHOOT_PATTERNS)
+_COMPILED_RESEARCH = tuple(re.compile(p, re.I) for p in _RESEARCH_PATTERNS)
+_COMPILED_LIVE_SHAPE = tuple(re.compile(p, re.I) for p in _LIVE_LOOKUP_SHAPE_PATTERNS)
+_COMPILED_XHIGH_EXTRA = tuple(re.compile(p, re.I) for p in _XHIGH_EXTRA_PATTERNS)
+_COMPILED_PERSONAL_QUICK = tuple(re.compile(p, re.I) for p in _PERSONAL_QUICK_PATTERNS)
+
+
+def _normalize_for_match(text: str) -> str:
+    """Lowercase, collapse whitespace, and fold typographic quotes (phones send ’)."""
+    folded = str(text or "").translate({0x2019: "'", 0x2018: "'", 0x201C: '"', 0x201D: '"', 0x2014: " ", 0x2013: " "})
+    return " ".join(folded.strip().split()).lower()
+
+
+def _risk_view(lowered: str) -> str:
+    view = lowered
+    for pattern, replacement in _RISK_MASKS:
+        view = pattern.sub(replacement, view)
+    return view
+
+
+def _strip_request_prefix(lowered: str) -> str:
+    return _REQUEST_PREFIX_RE.sub("", lowered, count=1).strip()
+
+
+def _is_pure_question(lowered: str) -> bool:
+    """A question asking for an answer, not a polite request to do work."""
+    text = lowered.strip()
+    if not text or _REQUEST_QUESTION_RE.match(text):
+        return False
+    return bool(_QUESTION_START_RE.match(text)) or text.endswith("?")
+
+
+def _is_imperative_request(lowered: str) -> bool:
+    core = _strip_request_prefix(lowered)
+    if not core:
+        return False
+    match = _IMPERATIVE_VERB_RE.match(core)
+    if not match:
+        return False
+    rest = core[match.end():].strip(" .!?")
+    # "set this one please" / "fix" alone carry no task of their own.
+    return bool(rest) and not re.fullmatch(r"(?:it|this|that|this\s+one|that\s+one|them|those)(?:\s+please)?", rest)
+
+
+_BUILD_ARTIFACT_RE = re.compile(
+    r"^(?:write|build|create|implement|automate|script|generate|make)\b.{0,40}\b(?:script|plist|launchd|cron|"
+    r"job|bot|service|tool|app|page|site|dashboard|hook|webhook|plugin|skill|digest|workflow|pipeline|api|cli|"
+    r"integration|exporter|importer|parser|scraper|daemon|endpoint|test\s+suite|tests)\b"
+    r"|^script\s+to\b",
+    re.I,
+)
+_OPTION_PICK_RE = re.compile(
+    r"^(?:(?:option|choice|plan|number|#)\s*)?(?:\d{1,2}|[a-d])[.)!]?(?:\s+(?:please|pls|then|it\s+is))?[.!]?$"
+    r"|^(?:the\s+)?(?:first|second|third|last)\s+(?:one|option)\b",
+    re.I,
+)
+
+
+_BARE_CONTINUE_RE = re.compile(
+    r"^(?:(?:ok(?:ay)?|yes|yeah|yep|sure|alright|great|perfect)[,.!\s]+)?(?:please\s+)?"
+    r"(?:continue|keep\s+going|go\s+on|carry\s+on|proceed|resume|try\s+again|retry|finish\s+(?:it|up|the\s+job))"
+    r"(?:\s+please)?[.!]*$",
+    re.I,
+)
+
+
+def _is_short_status_question(lowered: str, cfg: dict[str, Any]) -> bool:
+    """A short question about state ("when did the backup run") rather than a task."""
+    if len(lowered) > 120 or not _is_pure_question(lowered) or _is_imperative_request(lowered):
+        return False
+    if _DESIGN_WORD_RE.search(lowered) or _matches(_COMPILED_RESEARCH, lowered):
+        return False
+    return bool(
+        re.match(r"^(?:when|what\s+time|did|has|have|was|were|is|are|which|where)\b", lowered)
+        or re.match(r"^why\s+did\s+(?:my|the|our|this|it)\b.{0,60}\b(?:not|fail|stop|skip)", lowered)
+        or _is_live_lookup(lowered, cfg)
+    )
+
+
+def _is_closer(lowered: str) -> bool:
+    """Thanks / lol / nice: ends a thread rather than continuing its work."""
+    words = re.findall(r"[a-z']+", lowered)
+    if not words:
+        return not re.search(r"\d", lowered)  # emoji/punctuation only; "2" is an option pick
+    if re.fullmatch(r"a+y+", words[0] or ""):
+        words = words[1:] or ["yay"]
+    return all(w in _CLOSER_WORDS for w in words) and any(w in _CLOSER_CORE_WORDS for w in words)
+
+
+def _live_terms(config: dict[str, Any] | None) -> tuple[str, ...]:
+    extra = (config or {}).get("live_system_terms") or []
+    if isinstance(extra, str):
+        extra = [part.strip() for part in extra.split(",")]
+    cleaned = tuple(str(term).strip().lower() for term in extra if str(term or "").strip())
+    return _LIVE_SYSTEM_TERMS + cleaned
+
+
+def _mentions_live_system(lowered: str, config: dict[str, Any] | None) -> bool:
+    for term in _live_terms(config):
+        if " " in term or "-" in term:
+            if term in lowered:
+                return True
+        elif re.search(rf"\b{re.escape(term)}\b", lowered):
+            return True
+    return False
+
+
+def _is_live_lookup(lowered: str, config: dict[str, Any] | None) -> bool:
+    if not _matches(_COMPILED_LIVE_SHAPE, lowered):
+        return False
+    return _mentions_live_system(lowered, config)
+
+
+def _floor_effort(effort: str, floor_key: str, cfg: dict[str, Any]) -> str | None:
+    floor = _normalize_effort_name(cfg.get(floor_key) or "")
+    if floor not in EFFORT_ORDER:
+        return None
+    return _max_effort((effort, floor), cfg)
 
 
 def _preview(text: str, limit: int = 160) -> str:
@@ -1202,15 +1719,33 @@ def _hermes_home() -> Path:
     return _main_config_path().parent
 
 
+_YAML_CACHE: dict[str, tuple[tuple[int, int], dict[str, Any]]] = {}
+
+
 def _read_yaml_file(path: Path) -> dict[str, Any]:
-    if yaml is None or not path.exists():
+    global _CONFIG_ERROR
+    try:
+        stat = path.stat()
+    except OSError:
         return {}
+    if yaml is None:
+        _CONFIG_ERROR = f"no YAML parser available to read {path}"
+        return {}
+    stamp = (stat.st_mtime_ns, stat.st_size)
+    cached = _YAML_CACHE.get(str(path))
+    if cached and cached[0] == stamp:
+        return dict(cached[1])
     try:
         data = yaml.safe_load(path.read_text()) or {}
     except Exception as exc:
         logger.warning("reasoning-router: failed to read %s: %s", path, exc)
+        _CONFIG_ERROR = f"failed to read {path}: {exc}"
         return {}
-    return data if isinstance(data, dict) else {}
+    if not isinstance(data, dict):
+        _CONFIG_ERROR = f"{path} is not a mapping"
+        return {}
+    _YAML_CACHE[str(path)] = (stamp, dict(data))
+    return data
 
 
 def _read_full_config() -> dict[str, Any]:
@@ -1224,6 +1759,8 @@ def _read_legacy_router_config() -> dict[str, Any]:
 
 
 def _read_router_config_from_disk(*, include_runtime_override: bool = True) -> dict[str, Any]:
+    global _CONFIG_ERROR
+    _CONFIG_ERROR = None
     config_path = _config_path()
     router = _read_full_config()
     if not config_path.exists():
@@ -1510,13 +2047,69 @@ def _current_session_override(gateway, session_key: str) -> dict[str, Any] | Non
     return None
 
 
+def _router_set_map(gateway) -> dict[str, dict[str, Any]]:
+    """Overrides this router wrote, keyed by session.
+
+    Kept on the gateway object rather than only in module state: Hermes can
+    re-exec a plugin module on reload, and a fresh module-level map would make
+    every leftover router override look like a manual pin forever.
+    """
+    if gateway is None:
+        return _ROUTER_SET
+    try:
+        existing = gateway.__dict__.get("_reasoning_router_set")
+    except AttributeError:
+        return _ROUTER_SET
+    if isinstance(existing, dict):
+        return existing
+    try:
+        gateway._reasoning_router_set = _ROUTER_SET
+    except Exception:
+        return _ROUTER_SET
+    return _ROUTER_SET
+
+
 def _has_manual_override(gateway, session_key: str) -> bool:
     """True when the session override was set by a human, not by this router."""
+    router_set = _router_set_map(gateway)
     current = _current_session_override(gateway, session_key)
     if current is None:
-        _ROUTER_SET.pop(session_key, None)
+        router_set.pop(session_key, None)
         return False
-    return _ROUTER_SET.get(session_key) != current
+    return router_set.get(session_key) != current
+
+
+def _release_router_override(gateway, session_key: str) -> bool:
+    """Clear an override only if this router wrote it; manual pins stay."""
+    if not session_key:
+        return False
+    router_set = _router_set_map(gateway)
+    mine = router_set.get(session_key)
+    if mine is None:
+        return False
+    current = _current_session_override(gateway, session_key)
+    router_set.pop(session_key, None)
+    if current != mine:
+        return False
+    try:
+        _set_reasoning_override(gateway, session_key, None)
+    except Exception as exc:
+        logger.warning("reasoning-router: failed to clear router override: %s", exc)
+        return False
+    return True
+
+
+def _is_reasoning_slash_command(text: str) -> bool:
+    return bool(re.match(r"^\s*/reasoning(?:@\S+)?(?:\s|$)", text or "", re.I))
+
+
+def _looks_like_slash_command(text: str) -> bool:
+    """Mirror the host: "/Users/me/x.py crashes" is a path, not a command."""
+    stripped = (text or "").lstrip()
+    if not stripped.startswith("/"):
+        return False
+    head = stripped.split(maxsplit=1)[0][1:].split("@", 1)[0]
+    return bool(head) and "/" not in head
 
 
 def _session_model(gateway, session_key: str) -> str:
@@ -1575,7 +2168,8 @@ def _clamp_to_model(effort: str, model: str) -> str:
     return max(below, key=EFFORT_ORDER.index) if below else min(ranked, key=EFFORT_ORDER.index)
 
 
-def _set_reasoning_override(gateway, session_key: str, reasoning_config: dict[str, Any]) -> None:
+def _set_reasoning_override(gateway, session_key: str, reasoning_config: dict[str, Any] | None) -> None:
+    """Write (or clear, when ``reasoning_config`` is None) the session override."""
     setter = getattr(gateway, "_set_session_reasoning_override", None)
     if callable(setter):
         setter(session_key, reasoning_config)
@@ -1583,7 +2177,10 @@ def _set_reasoning_override(gateway, session_key: str, reasoning_config: dict[st
 
     overrides = getattr(gateway, "_session_reasoning_overrides", None)
     if isinstance(overrides, dict):
-        overrides[session_key] = reasoning_config
+        if reasoning_config is None:
+            overrides.pop(session_key, None)
+        else:
+            overrides[session_key] = reasoning_config
         return
 
     raise RuntimeError("gateway does not expose session reasoning overrides")
