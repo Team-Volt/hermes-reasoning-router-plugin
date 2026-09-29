@@ -375,11 +375,13 @@ def pre_gateway_dispatch(event=None, gateway=None, session_store=None, **_kwargs
     # Built-in/plugin slash commands should keep their own semantics. In
     # particular, /reasoning must be able to set manual state without us racing
     # it from the pre-dispatch hook.
+    _install_manual_write_hook(gateway)
     if _looks_like_slash_command(text):
         if _is_reasoning_slash_command(text) and _reasoning_command_changes_override(text):
-            # Whatever /reasoning sets next is the human's, even when it equals
-            # the value the router had picked. show/hide/on/off and bare
-            # /reasoning never touch the override, so the router keeps it.
+            # Whatever a typed /reasoning sets next is the human's, even when it
+            # equals the router's pick. When the setter hook is installed the
+            # successful write itself also records ownership, which covers
+            # picker callbacks that never pass through this pre-dispatch hook.
             key = _session_key_for(event, gateway, session_store)
             if key:
                 _router_set_map(gateway).pop(key, None)
@@ -733,6 +735,11 @@ def _classify_core(
     cfg: dict[str, Any],
 ) -> tuple[str, str]:
     if _EFFORT_WORD_RE.search(lowered) and not _is_simple_factual_question(lowered):
+        # Several directives in one message resolve together; the strongest
+        # wins, then config and model limits apply ("use maximum reasoning and
+        # think hard" is a max request, not xhigh).
+        if _matches(_COMPILED_MAX, lowered) or _MAX_DIRECTIVE_ANY_RE.search(lowered):
+            return _clamp_effort("max", cfg), "explicit maximum/Ultra reasoning request"
         return _clamp_effort("xhigh", cfg), "explicit request for extra-high reasoning"
 
     # Thanks, venting and sarcasm can quote risky words without asking for
@@ -1445,9 +1452,38 @@ def _consume_pending_intent(session_id: str) -> None:
         pending["consumed"] = True
 
 
+_CLAUSE_SPLIT_RE = re.compile(
+    r"(?<=[?.!;:])\s+|,\s*|\s+(?:and\s+)?(?:then|also|afterwards?|after\s+that|next)\s+"
+    r"|\s+(?:and|but|plus|however)\s+(?:please\s+)?(?=[a-z])"
+)
+_WORK_WORD_RE = re.compile(
+    r"\b(?:fix|debug|implement|build|change|modify|configure|deploy|restart|reboot|delete|remove|migrate|patch|"
+    r"update|upgrade|review|audit|secure|rotate|revoke|wipe|drop|purge|prune|kill|reset|install|write|create|"
+    r"set\s*up|clean\s*up|push|merge|rollback|roll\s+back|destroy|truncate|expose|run)\b"
+)
+
+
+def _later_clause_has_work(lowered: str) -> bool:
+    """True when any clause after the first asks for work.
+
+    "What does OAuth mean? Rotate the API keys" is a definition plus a task;
+    cheap informational shortcuts only apply when the whole message is a question.
+    """
+    clauses = [c.strip(" .!?") for c in _CLAUSE_SPLIT_RE.split(str(lowered or "")) if c and c.strip(" .!?")]
+    for clause in clauses[1:]:
+        core = _strip_request_prefix(clause)
+        if _IMPERATIVE_VERB_RE.match(core) or _SOCIAL_REQUEST_RE.match(clause):
+            return True
+        if not _QUESTION_START_RE.match(clause) and _WORK_WORD_RE.search(clause):
+            return True
+    return False
+
+
 def _is_simple_factual_question(lowered: str) -> bool:
     text = str(lowered or "").strip()
     if not text:
+        return False
+    if _later_clause_has_work(text):
         return False
     if re.match(r"^what\s+does\s+[\w .'/-]{1,40}\s+do[?!.\s]*$", text):
         return True
@@ -1670,6 +1706,13 @@ _EFFORT_WORD_RE = re.compile(
     r"|\bextra[\s-]*high\s+(?:reasoning|effort|thinking)\b",
     re.I,
 )
+# Unanchored max directive, consulted only when another effort directive is in
+# the same message so the strongest one can win.
+_MAX_DIRECTIVE_ANY_RE = re.compile(
+    r"\b(?:use|using|with|at|on|set\s+(?:it\s+)?to|switch\s+to|go)\s+(?:the\s+)?(?:max(?:imum)?|ultra)"
+    r"(?:\s+(?:reasoning|effort|thinking))?\b",
+    re.I,
+)
 _QUESTION_START_RE = re.compile(
     r"^(?:explain|describe|what|what'?s|whats|why|how|which|when|where|who|is|are|was|were|does|do|did|should|would|could|"
     r"can\s+(?:i|it|this|that|they)|will\s+(?:it|this|that)|has|have|any|anything)\b",
@@ -1693,8 +1736,27 @@ def _normalize_for_match(text: str) -> str:
     return " ".join(folded.strip().split()).lower()
 
 
+_QUOTED_SPAN_RE = re.compile(r"```.*?(?:```|$)|`[^`]{1,400}`|\"[^\"]{1,400}\"", re.S)
+# Asking to run or apply the quoted text keeps it live: "run `terraform destroy`".
+_EXEC_REQUEST_RE = re.compile(
+    r"\b(?:run|rerun|re-run|execute|exec|invoke|apply|paste\s+(?:and|&)\s+run|go\s+ahead)\b"
+    r"|\b(?:do|try)\s+(?:it|this|that)\b",
+    re.I,
+)
+
+
+def _mask_quoted_evidence(lowered: str) -> str:
+    """Quoted/fenced text is evidence (logs, output) unless the user asks to run it."""
+    if not any(ch in lowered for ch in "`\""):
+        return lowered
+    outside = _QUOTED_SPAN_RE.sub(" ", lowered)
+    if _EXEC_REQUEST_RE.search(outside):
+        return lowered
+    return _QUOTED_SPAN_RE.sub(" quoted text ", lowered)
+
+
 def _risk_view(lowered: str) -> str:
-    view = lowered
+    view = _mask_quoted_evidence(lowered)
     for pattern, replacement in _RISK_MASKS:
         view = pattern.sub(replacement, view)
     return view
@@ -1705,7 +1767,10 @@ _NEGATED_CLAUSE_RE = re.compile(
     r"not\s+asking\s+(?:you\s+|u\s+)?to|without|skip(?:ping)?|won'?t\s+need\s+to)\s+(?:\w+\s+){0,2}?"
     r"(?:wip(?:e|ing)|drop(?:ping)?|delet(?:e|ing)|remov(?:e|ing)|restart(?:ing)?|reboot(?:ing)?|expos(?:e|ing)|touch(?:ing)?|"
     r"force[-\s]?push(?:ing)?|push(?:ing)?|rotat\w*|the\s+rotation|deploy(?:ing)?|chang(?:e|ing)|modify(?:ing)?|kill(?:ing)?|"
-    r"reset(?:ting)?|nuk(?:e|ing)|format(?:ting)?|anything)\b[^,;.!?]*",
+    r"reset(?:ting)?|nuk(?:e|ing)|format(?:ting)?|anything)\b"
+    # Mask only the negated clause: stop at punctuation or at a conjunction
+    # that starts a new, positive clause ("... but rotate the keys").
+    r"(?:(?!\b(?:but|and|then|however|though|although|instead|yet|except|also|plus|so)\b)[^,;.!?:])*",
     re.I,
 )
 
@@ -1777,6 +1842,11 @@ def _is_pure_question(lowered: str) -> bool:
     text = lowered.strip()
     if not text or _REQUEST_QUESTION_RE.match(text):
         return False
+    # "do not restart X but rotate Y" is an instruction, not a "do ...?" question.
+    if re.match(r"(?:do\s+not|don'?t|dont)\b", text):
+        return False
+    if _later_clause_has_work(text):
+        return False
     return bool(_QUESTION_START_RE.match(text)) or text.endswith("?")
 
 
@@ -1820,6 +1890,8 @@ _BARE_CONTINUE_RE = re.compile(
 def _is_short_status_question(lowered: str, cfg: dict[str, Any]) -> bool:
     """A short question about state ("when did the backup run") rather than a task."""
     if len(lowered) > 120 or not _is_pure_question(lowered) or _is_imperative_request(lowered):
+        return False
+    if _later_clause_has_work(lowered):
         return False
     if _DESIGN_WORD_RE.search(lowered) or _matches(_COMPILED_RESEARCH, lowered):
         return False
@@ -2026,7 +2098,11 @@ def _read_yaml_file(path: Path) -> dict[str, Any]:
             return {}
         return dict(cached[1])
     try:
-        data = yaml.safe_load(raw.decode("utf-8")) or {}
+        data = yaml.safe_load(raw.decode("utf-8"))
+        # Only an empty document means "no settings". [], false or 0 are
+        # malformed configs and must stay errors, not silently become {}.
+        if data is None:
+            data = {}
     except Exception as exc:
         logger.warning("reasoning-router: failed to read %s: %s", path, exc)
         error = f"failed to read {path}: {exc}"
@@ -2400,10 +2476,14 @@ def _router_set_map(gateway) -> dict[str, dict[str, Any]]:
 def _has_manual_override(gateway, session_key: str) -> bool:
     """True when the session override was set by a human, not by this router."""
     router_set = _router_set_map(gateway)
+    manual = _manual_session_keys(gateway)
     current = _current_session_override(gateway, session_key)
     if current is None:
         router_set.pop(session_key, None)
+        manual.discard(session_key)
         return False
+    if session_key in manual:
+        return True
     return router_set.get(session_key) != current
 
 
@@ -2431,16 +2511,78 @@ def _is_reasoning_slash_command(text: str) -> bool:
     return bool(re.match(r"^\s*/reasoning(?:@\S+)?(?:\s|$)", text or "", re.I))
 
 
-_REASONING_SETTING_ARGS = frozenset(EFFORT_ORDER) | frozenset(EFFORT_ALIASES) | {"reset", "default", "auto"}
+# Every value Hermes' /reasoning applier writes: parse_reasoning_effort's
+# levels (incl. ``ultra``), its disable words (none/false/disabled), and reset.
+# Display toggles (show/on/hide/off) and unknown words never touch the override.
+_REASONING_DISABLE_ARGS = frozenset({"none", "false", "disabled"})
+_REASONING_SETTING_ARGS = (
+    frozenset(EFFORT_ORDER) | frozenset(EFFORT_ALIASES) | _REASONING_DISABLE_ARGS | {"reset"}
+)
 
 
 def _reasoning_command_changes_override(text: str) -> bool:
-    """True for /reasoning <level>|reset; False for display toggles or bare /reasoning."""
-    parts = (text or "").strip().split()[1:]
-    args = [part.lower() for part in parts if not part.startswith("-")]
+    """True for /reasoning <level>|none|false|disabled|reset; False for toggles or bare /reasoning."""
+    parts = (text or "").strip().replace("\u2014", "--").split()[1:]
+    args = [part.lower() for part in parts if part != "--global"]
     if not args:
         return False
-    return args[0] in _REASONING_SETTING_ARGS
+    return " ".join(args) in _REASONING_SETTING_ARGS
+
+
+_ROUTER_WRITE = threading.local()
+
+
+def _manual_session_keys(gateway) -> set[str]:
+    """Sessions whose current override came from a human write (typed or picker)."""
+    if gateway is None:
+        return set()
+    try:
+        existing = gateway.__dict__.get("_reasoning_router_manual")
+    except AttributeError:
+        return set()
+    if isinstance(existing, set):
+        return existing
+    fresh: set[str] = set()
+    try:
+        gateway._reasoning_router_manual = fresh
+    except Exception:
+        pass
+    return fresh
+
+
+def _install_manual_write_hook(gateway) -> bool:
+    """Wrap the gateway's override setter so non-router writes are marked manual.
+
+    Ownership then follows who wrote the value, not what the value is: picking
+    the same level the router chose, from a typed /reasoning or the native
+    picker callback, still pins it. Returns False when the host exposes no setter.
+    """
+    try:
+        setter = getattr(gateway, "_set_session_reasoning_override", None)
+    except Exception:
+        return False
+    if not callable(setter):
+        return False
+    if getattr(setter, "_reasoning_router_hook", False):
+        return True
+
+    def hooked(session_key, reasoning_config, *args, **kwargs):
+        result = setter(session_key, reasoning_config, *args, **kwargs)
+        if not getattr(_ROUTER_WRITE, "active", False) and session_key:
+            manual = _manual_session_keys(gateway)
+            _router_set_map(gateway).pop(session_key, None)
+            if reasoning_config is None:
+                manual.discard(session_key)
+            else:
+                manual.add(session_key)
+        return result
+
+    hooked._reasoning_router_hook = True  # type: ignore[attr-defined]
+    try:
+        gateway._set_session_reasoning_override = hooked
+    except Exception:
+        return False
+    return True
 
 
 def _looks_like_slash_command(text: str) -> bool:
@@ -2494,25 +2636,60 @@ def _supported_efforts_for_model(model: str) -> tuple[str, ...] | None:
     return None
 
 
+def _fallback_clamp_effort(effort: str, supported) -> str:
+    """Faithful copy of Hermes' ``agent.reasoning_effort.clamp_effort`` (no overrides).
+
+    Nearest weaker supported level, else the weakest supported one. ``none``
+    disables reasoning, so it is never a clamp target for an enabled request:
+    ``minimal`` on a ladder without ``minimal`` becomes ``low``, not off.
+    """
+    requested = str(effort or "").strip().lower()
+    if not requested or not supported:
+        return effort
+    supported_norm = [lvl for lvl in (str(s).strip().lower() for s in supported) if lvl in EFFORT_ORDER]
+    if not supported_norm or requested in supported_norm:
+        return effort
+    if requested not in EFFORT_ORDER:
+        return effort
+    candidates = [level for level in supported_norm if level != "none"]
+    if not candidates:
+        return effort
+    requested_idx = EFFORT_ORDER.index(requested)
+    below = [level for level in candidates if EFFORT_ORDER.index(level) < requested_idx]
+    return max(below, key=EFFORT_ORDER.index) if below else min(candidates, key=EFFORT_ORDER.index)
+
+
 def _clamp_to_model(effort: str, model: str) -> str:
-    """Nearest supported level at or below ``effort``; the model's floor if none is below."""
+    """Fit ``effort`` to the model's wire ladder using Hermes' own clamp rules.
+
+    Never escalates cost, and never turns an enabled request into ``none``.
+    """
     supported = _supported_efforts_for_model(model)
     effort = _normalize_effort_name(effort)
-    if not supported or effort in supported or effort not in EFFORT_ORDER:
+    if not supported:
         return effort
-    ranked = [e for e in supported if e in EFFORT_ORDER]
-    if not ranked:
-        return effort
-    idx = EFFORT_ORDER.index(effort)
-    below = [e for e in ranked if EFFORT_ORDER.index(e) <= idx]
-    return max(below, key=EFFORT_ORDER.index) if below else min(ranked, key=EFFORT_ORDER.index)
+    try:  # stay in lockstep with Hermes when it is importable
+        from agent.reasoning_effort import clamp_effort as _hermes_clamp_effort
+
+        fitted = _hermes_clamp_effort(effort, supported)
+    except Exception:
+        fitted = _fallback_clamp_effort(effort, supported)
+    fitted = _normalize_effort_name(fitted)
+    if effort != "none" and fitted == "none":  # belt and braces across Hermes versions
+        fitted = _fallback_clamp_effort(effort, [e for e in supported if e != "none"])
+    return fitted
 
 
 def _set_reasoning_override(gateway, session_key: str, reasoning_config: dict[str, Any] | None) -> None:
     """Write (or clear, when ``reasoning_config`` is None) the session override."""
     setter = getattr(gateway, "_set_session_reasoning_override", None)
     if callable(setter):
-        setter(session_key, reasoning_config)
+        _ROUTER_WRITE.active = True
+        try:
+            setter(session_key, reasoning_config)
+        finally:
+            _ROUTER_WRITE.active = False
+        _manual_session_keys(gateway).discard(session_key)
         return
 
     overrides = getattr(gateway, "_session_reasoning_overrides", None)
