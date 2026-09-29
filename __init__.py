@@ -38,10 +38,15 @@ EFFORT_ALIASES = {"ultra": "max"}
 
 # Per-model wire ladders (mirrors hermes agent/reasoning_effort.py). Used only when
 # Hermes' own resolver is unavailable. GPT-6 Sol/Luna (and gpt-5.6) accept max;
-# Terra stops at xhigh; Astra has no disable/minimal level.
+# Terra stops at xhigh; Astra and GPT-6.1 Sol have no disable/minimal level.
 _GPT6_MAX_EFFORTS = ("none", "low", "medium", "high", "xhigh", "max")
 _GPT6_TERRA_EFFORTS = ("none", "low", "medium", "high", "xhigh")
 _GPT6_ASTRA_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+# GPT-6.1 Sol (released 2026-09-29): low..max, no none/minimal (OpenAI model page).
+_GPT61_SOL_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+# Models newer than some Hermes releases: pinned here so an older Hermes resolver
+# (which falls back to the legacy none..xhigh ladder) can't cap max or send none.
+_PINNED_GPT_LADDERS = {"gpt-6.1-sol": _GPT61_SOL_EFFORTS}
 _CODEX_LEGACY_EFFORTS = ("none", "low", "medium", "high", "xhigh")
 _CLAUDE_EFFORTS = ("none", "low", "medium", "high", "xhigh", "max")
 DEFAULT_CONFIG = {
@@ -2639,6 +2644,9 @@ def _supported_efforts_for_model(model: str) -> tuple[str, ...] | None:
     if not bare:
         return None
     if bare.startswith("gpt-"):
+        for prefix, ladder in _PINNED_GPT_LADDERS.items():
+            if bare == prefix or bare.startswith(prefix + "-"):
+                return ladder
         try:  # stay in lockstep with Hermes when it is importable
             from agent.reasoning_effort import codex_supported_efforts
 
