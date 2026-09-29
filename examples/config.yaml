@@ -43,11 +43,24 @@ xhigh_high_match_threshold: 4
 pending_intent_enabled: true
 pending_intent_ttl_minutes: 30
 
+# Session momentum: terse follow-ups ("continue", "still broken") after a
+# tool-heavy turn get a floor instead of routing low. Closers stay low.
+momentum_enabled: true
+momentum_ttl_minutes: 45
+momentum_min_tool_calls: 5     # previous turn >= this -> at least medium
+momentum_heavy_tool_calls: 15  # previous turn >= this -> at least high
+
+# Floors for short messages that would otherwise look "simple" by length.
+# Set any of these to "" to disable.
+troubleshoot_floor: medium   # "the app keeps crashing"
+research_floor: medium       # "which is better, x or y"
+live_lookup_floor: medium    # "did the backup run?"
+
 # Optional OpenAI-compatible semantic classifier for ambiguous cases only.
 # Disabled by default; deterministic guardrails still win when enabled.
 semantic_classifier_enabled: false
 semantic_classifier_url: http://127.0.0.1:8080/v1/chat/completions
-semantic_classifier_model: gpt-5.6-luna
+semantic_classifier_model: gpt-6-luna
 # Prefer CODEX_PROXY_API_KEY or OPENAI_API_KEY in the gateway environment over
 # storing a key here. Leave empty to use env vars, or omit the field entirely.
 semantic_classifier_api_key: ""

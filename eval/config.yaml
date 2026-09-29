@@ -1,0 +1,16 @@
+# Router config used by eval/evaluate.py. Semantic classifier stays off so the
+# numbers are deterministic and no message text leaves the machine.
+enabled: true
+shadow_mode: false
+log_decisions: false
+decision_log: false
+enabled_platforms: [discord]
+default: medium
+min: low
+max: xhigh
+url_floor: medium
+model_aware_clamp: true
+respect_manual_override: true
+pending_intent_enabled: true
+pending_intent_ttl_minutes: 30
+semantic_classifier_enabled: false
