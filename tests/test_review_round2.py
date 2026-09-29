@@ -206,6 +206,42 @@ def test_request_to_run_quoted_command_still_escalates(text):
     assert effort == "xhigh", text
 
 
+@pytest.mark.parametrize(
+    ("plain", "quoted"),
+    (
+        ("Please reset all user passwords", "Please reset all user `passwords`"),
+        ("revoke all tokens", "revoke all `tokens`"),
+        ("rotate the prod API keys", 'rotate the prod "API keys"'),
+    ),
+)
+def test_quoted_operand_of_action_request_stays_live(plain, quoted):
+    plugin = load_plugin()
+    plain_effort, _ = plugin.classify_message(plain, {"max": "max"})
+    quoted_effort, _ = plugin.classify_message(quoted, {"max": "max"})
+    assert plain_effort == "xhigh", plain
+    assert quoted_effort == plain_effort, quoted
+
+
+def test_quoted_operand_request_end_to_end_on_sol():
+    plugin = load_plugin()
+    gateway = StatefulGateway(model="gpt-6-sol")
+    override = _route(plugin, gateway, "Please reset all user `passwords`")
+    assert override == {"enabled": True, "effort": "xhigh"}
+
+
+@pytest.mark.parametrize(
+    "text",
+    (
+        "the log says `revoke all tokens` failed, what does that mean?",
+        'why did the audit output say "reset all user passwords"?',
+    ),
+)
+def test_quoted_action_inside_evidence_still_masked(text):
+    plugin = load_plugin()
+    effort, _ = plugin.classify_message(text, {"max": "max"})
+    assert effort != "xhigh", text
+
+
 # 6. several explicit directives: strongest wins, limits still apply -----------
 
 

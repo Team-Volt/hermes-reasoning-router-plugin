@@ -1745,14 +1745,35 @@ _EXEC_REQUEST_RE = re.compile(
 )
 
 
+# A quote that is the object of an imperative action ("reset all user `passwords`",
+# "revoke all `tokens`") is an operand, not evidence, so it stays live.
+_ACTION_OPERAND_RE = re.compile(
+    r"(?:^|[.!?;:\n]\s*|\b(?:please|pls|now|then|and|also|just|can\s+you|could\s+you|go\s+ahead\s+and)\s+)"
+    r"(?:reset|revoke|rotate|regenerate|delete|remove|drop|wipe|purge|destroy|truncate|disable|kill|stop|"
+    r"restart|reboot|deploy|redeploy|push|force[-\s]?push|migrate|revert|roll\s*back|rollback|chmod|chown|"
+    r"expose|grant|change|update|upgrade|downgrade|overwrite|replace|move|rename|unset|clear|flush|expire|"
+    r"invalidate|ban|block|unblock|lock|unlock|terminate|uninstall|install|enable|shut\s*down)\b"
+    r"(?:\s+[\w'./-]+){0,5}\s*$",
+    re.I,
+)
+
+
 def _mask_quoted_evidence(lowered: str) -> str:
-    """Quoted/fenced text is evidence (logs, output) unless the user asks to run it."""
+    """Quoted/fenced text is evidence (logs, output) unless the user asks to run
+    it or it is the operand of an explicit action request."""
     if not any(ch in lowered for ch in "`\""):
         return lowered
     outside = _QUOTED_SPAN_RE.sub(" ", lowered)
     if _EXEC_REQUEST_RE.search(outside):
         return lowered
-    return _QUOTED_SPAN_RE.sub(" quoted text ", lowered)
+
+    def _mask(match: "re.Match[str]") -> str:
+        before = _QUOTED_SPAN_RE.sub(" ", lowered[: match.start()])
+        if _ACTION_OPERAND_RE.search(before):
+            return match.group(0)
+        return " quoted text "
+
+    return _QUOTED_SPAN_RE.sub(_mask, lowered)
 
 
 def _risk_view(lowered: str) -> str:
