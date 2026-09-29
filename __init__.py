@@ -9,11 +9,13 @@ the real backend reasoning parameter rather than prompt-injecting advice.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
 import re
 import sqlite3
+import threading
 import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -292,8 +294,18 @@ _ROUTER_SET: dict[str, dict[str, Any]] = {}
 # follow-up inherit the weight of the task it continues.
 _MOMENTUM: dict[str, dict[str, Any]] = {}
 # Set when a config file exists but cannot be parsed. Routing from defaults in
-# that state would silently ignore the user's clamps and platform list.
-_CONFIG_ERROR: str | None = None
+# that state would silently ignore the user's clamps and platform list. Kept per
+# thread: the agent thread re-reads config while the event loop routes.
+_CONFIG_STATE = threading.local()
+_MOMENTUM_LOCK = threading.Lock()
+
+
+def _config_error() -> str | None:
+    return getattr(_CONFIG_STATE, "error", None)
+
+
+def _set_config_error(value: str | None) -> None:
+    _CONFIG_STATE.error = value
 _LAST_HEALTH: dict[str, dict[str, Any] | None] = {
     "route": None,
     "override": None,
@@ -306,7 +318,7 @@ def _sweep_stale_state(config: dict[str, Any]) -> None:
     try:
         for sid in list(_PENDING_INTENTS):
             _active_pending_intent(sid, config)  # pops expired/consumed entries
-        ttl = max(1, _safe_int(config.get("momentum_ttl_minutes"), DEFAULT_CONFIG["momentum_ttl_minutes"]))
+        ttl = _momentum_ttl(config)
         cutoff = datetime.now(timezone.utc) - timedelta(minutes=ttl)
         for sid, state in list(_MOMENTUM.items()):
             at = state.get("at") if isinstance(state, dict) else None
@@ -363,9 +375,10 @@ def pre_gateway_dispatch(event=None, gateway=None, session_store=None, **_kwargs
     # particular, /reasoning must be able to set manual state without us racing
     # it from the pre-dispatch hook.
     if _looks_like_slash_command(text):
-        if _is_reasoning_slash_command(text):
+        if _is_reasoning_slash_command(text) and _reasoning_command_changes_override(text):
             # Whatever /reasoning sets next is the human's, even when it equals
-            # the value the router had picked.
+            # the value the router had picked. show/hide/on/off and bare
+            # /reasoning never touch the override, so the router keeps it.
             key = _session_key_for(event, gateway, session_store)
             if key:
                 _router_set_map(gateway).pop(key, None)
@@ -374,9 +387,12 @@ def pre_gateway_dispatch(event=None, gateway=None, session_store=None, **_kwargs
         return None
 
     config = _router_config(gateway)
-    if _CONFIG_ERROR:
-        logger.warning("reasoning-router: not routing; %s", _CONFIG_ERROR)
-        _record_health("config", status="unreadable", error=_CONFIG_ERROR)
+    config_error = _config_error()
+    if config_error:
+        logger.debug("reasoning-router: not routing; %s", config_error)
+        _record_health("config", status="unreadable", error=config_error)
+        # Refusing to route must not leave the last pick steering the session.
+        _release_router_override(gateway, _session_key_for(event, gateway, session_store))
         return None
     if not _truthy(config.get("enabled", True)):
         # Turning the router off must not leave its last pick (possibly
@@ -517,11 +533,14 @@ def post_llm_call(
         return None
 
     config = _read_router_config_from_disk()
-    if _CONFIG_ERROR or not _truthy(config.get("enabled", True)):
+    if _config_error() or not _truthy(config.get("enabled", True)):
         return None
 
     _sweep_stale_state(config)
-    _record_momentum(sid, conversation_history, config)
+    try:
+        _record_momentum(sid, conversation_history, config)
+    except Exception:
+        logger.debug("reasoning-router: momentum record failed", exc_info=True)
 
     if not _truthy(config.get("pending_intent_enabled", True)):
         _PENDING_INTENTS.pop(sid, None)
@@ -579,6 +598,15 @@ def reasoning_router_command(raw_args: str = "") -> str:
     parts = args.split(maxsplit=1)
     command = parts[0].strip().lower()
     value = parts[1].strip() if len(parts) > 1 else ""
+
+    if command not in {"help", "?", "test", "recent"}:
+        _read_router_config_from_disk(include_runtime_override=False)
+        config_error = _config_error()
+        if config_error:
+            return (
+                f"Reasoning router config is unreadable, so nothing was changed: {config_error}\n"
+                "Fix or remove the file, then retry."
+            )
 
     if command in {"help", "?"}:
         return (
@@ -1192,14 +1220,13 @@ def _record_momentum(session_id: str, conversation_history, config: dict[str, An
     if not _truthy(config.get("momentum_enabled", True)):
         _MOMENTUM.pop(session_id, None)
         return
-    _MOMENTUM[session_id] = {
-        "tool_calls": _turn_tool_calls(conversation_history),
-        "at": datetime.now(timezone.utc),
-    }
-    if len(_MOMENTUM) > 512:
-        oldest = sorted(_MOMENTUM, key=lambda key: _MOMENTUM[key]["at"])[: len(_MOMENTUM) - 512]
-        for key in oldest:
-            _MOMENTUM.pop(key, None)
+    entry = {"tool_calls": _turn_tool_calls(conversation_history), "at": datetime.now(timezone.utc)}
+    with _MOMENTUM_LOCK:
+        _MOMENTUM[session_id] = entry
+        if len(_MOMENTUM) > 512:
+            items = sorted(_MOMENTUM.items(), key=lambda item: item[1].get("at") or datetime.min.replace(tzinfo=timezone.utc))
+            for key, _state in items[: len(_MOMENTUM) - 512]:
+                _MOMENTUM.pop(key, None)
 
 
 _CONTINUE_RE = re.compile(
@@ -1208,6 +1235,42 @@ _CONTINUE_RE = re.compile(
     r"try\s+again|retry|again|next|and\s+now|same|still|also|what\s+about|now\s+(?:do|try|check|fix))\b",
     re.I,
 )
+
+
+_ANAPHORA_RE = re.compile(
+    r"\b(?:it|that|this|them|those|these|the\s+(?:other|rest|next|last|same)|others|same|again|too|as\s+well|"
+    r"instead|there|one\s+more|another|remaining|rest)\b",
+    re.I,
+)
+
+
+def _momentum_ttl(config: dict[str, Any]) -> int:
+    ttl = _safe_int(config.get("momentum_ttl_minutes"), DEFAULT_CONFIG["momentum_ttl_minutes"])
+    return min(max(1, ttl), 10_080)
+
+
+_FOLLOWUP_LEADS = frozenset({"and", "so", "but", "then", "also", "or", "plus", "why", "wait", "what's", "whats", "how's", "hows", "did", "does", "is", "was", "can", "could", "should", "will"})
+_GREETING_RE = re.compile(
+    r"^(?:good\s+(?:morning|afternoon|evening|night)|morning|gm|hi|hello|hey|yo|sup|howdy)\b[\s!.,]*(?:there|all|team)?[\s!.]*$",
+    re.I,
+)
+
+
+def _is_new_standalone_topic(text: str, lowered: str) -> bool:
+    """A greeting or self-contained general question that does not point back at the task."""
+    if _CONTINUE_RE.match(lowered) or _is_affirmative(text) or _OPTION_PICK_RE.match(lowered):
+        return False
+    if _ANAPHORA_RE.search(lowered):
+        return False
+    if _GREETING_RE.match(lowered):
+        return True
+    if not _is_pure_question(lowered):
+        return False
+    words = re.findall(r"[a-z0-9']+", lowered)
+    if len(words) < 4 or words[0] in _FOLLOWUP_LEADS:
+        return False  # "and then?", "why?", "so what now?" lean on the last turn
+    # A question about the systems being worked on is still part of the task.
+    return not (_mentions_live_system(lowered, None) or _matched_high_groups(_risk_view(lowered)))
 
 
 def _apply_momentum(
@@ -1227,7 +1290,7 @@ def _apply_momentum(
     state = _MOMENTUM.get(session_id)
     if not state:
         return effort, reason
-    ttl = max(1, _safe_int(config.get("momentum_ttl_minutes"), DEFAULT_CONFIG["momentum_ttl_minutes"]))
+    ttl = _momentum_ttl(config)
     if datetime.now(timezone.utc) - state["at"] > timedelta(minutes=ttl):
         _MOMENTUM.pop(session_id, None)
         return effort, reason
@@ -1239,6 +1302,9 @@ def _apply_momentum(
     if _is_closer(lowered) or _is_rejection(text):
         return effort, reason
     if EFFORT_ORDER.index(effort) >= EFFORT_ORDER.index("high"):
+        return effort, reason
+    if _is_new_standalone_topic(text, lowered):
+        # "what is the capital of france" after a big task is a new topic.
         return effort, reason
     heavy = _safe_int(config.get("momentum_heavy_tool_calls"), DEFAULT_CONFIG["momentum_heavy_tool_calls"])
     floor = "high" if tools >= heavy and (_CONTINUE_RE.match(lowered) or _is_affirmative(text)) else "medium"
@@ -1775,6 +1841,8 @@ def _live_terms(config: dict[str, Any] | None) -> tuple[str, ...]:
     extra = (config or {}).get("live_system_terms") or []
     if isinstance(extra, str):
         extra = [part.strip() for part in extra.split(",")]
+    elif not isinstance(extra, (list, tuple, set, frozenset)):
+        extra = []
     cleaned = tuple(str(term).strip().lower() for term in extra if str(term or "").strip())
     return _LIVE_SYSTEM_TERMS + cleaned
 
@@ -1882,30 +1950,43 @@ def _hermes_home() -> Path:
     return _main_config_path().parent
 
 
-_YAML_CACHE: dict[str, tuple[tuple[int, int], dict[str, Any]]] = {}
+_YAML_CACHE: dict[str, tuple[bytes, dict[str, Any] | str]] = {}
 
 
 def _read_yaml_file(path: Path) -> dict[str, Any]:
-    global _CONFIG_ERROR
-    try:
-        stat = path.stat()
-    except OSError:
+    if not path.is_file():
         return {}
     if yaml is None:
-        _CONFIG_ERROR = f"no YAML parser available to read {path}"
+        _set_config_error(f"no YAML parser available to read {path}")
         return {}
-    stamp = (stat.st_mtime_ns, stat.st_size)
+    try:
+        raw = path.read_bytes()
+    except OSError as exc:
+        _set_config_error(f"failed to read {path}: {exc}")
+        return {}
+    # Key on content, not mtime: a same-size edit inside one mtime tick would
+    # otherwise serve the old config. Hashing a small file costs microseconds;
+    # the YAML parse is what we skip.
+    stamp = hashlib.blake2b(raw, digest_size=16).digest()
     cached = _YAML_CACHE.get(str(path))
     if cached and cached[0] == stamp:
+        if isinstance(cached[1], str):
+            # Known-bad file, unchanged: same error, no re-parse, no log spam.
+            _set_config_error(cached[1])
+            return {}
         return dict(cached[1])
     try:
-        data = yaml.safe_load(path.read_text()) or {}
+        data = yaml.safe_load(raw.decode("utf-8")) or {}
     except Exception as exc:
         logger.warning("reasoning-router: failed to read %s: %s", path, exc)
-        _CONFIG_ERROR = f"failed to read {path}: {exc}"
+        error = f"failed to read {path}: {exc}"
+        _YAML_CACHE[str(path)] = (stamp, error)
+        _set_config_error(error)
         return {}
     if not isinstance(data, dict):
-        _CONFIG_ERROR = f"{path} is not a mapping"
+        error = f"{path} is not a mapping"
+        _YAML_CACHE[str(path)] = (stamp, error)
+        _set_config_error(error)
         return {}
     _YAML_CACHE[str(path)] = (stamp, dict(data))
     return data
@@ -1922,8 +2003,7 @@ def _read_legacy_router_config() -> dict[str, Any]:
 
 
 def _read_router_config_from_disk(*, include_runtime_override: bool = True) -> dict[str, Any]:
-    global _CONFIG_ERROR
-    _CONFIG_ERROR = None
+    _set_config_error(None)
     config_path = _config_path()
     router = _read_full_config()
     if not config_path.exists():
@@ -1938,6 +2018,10 @@ def _read_router_config_from_disk(*, include_runtime_override: bool = True) -> d
     return cfg
 
 
+class ConfigUnreadableError(RuntimeError):
+    """The router config exists but cannot be parsed; refuse to overwrite it."""
+
+
 def _update_router_config(updates: dict[str, Any]) -> None:
     global _RUNTIME_CONFIG_OVERRIDE
     if yaml is None:
@@ -1945,6 +2029,10 @@ def _update_router_config(updates: dict[str, Any]) -> None:
 
     path = _config_path()
     data = _read_router_config_from_disk(include_runtime_override=False)
+    config_error = _config_error()
+    if config_error:
+        # Writing now would replace the user's file with defaults plus one key.
+        raise ConfigUnreadableError(config_error)
     data.update(updates)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml.safe_dump(data, sort_keys=False))
@@ -1954,6 +2042,9 @@ def _update_router_config(updates: dict[str, Any]) -> None:
 
 def _format_status(config: dict[str, Any]) -> str:
     state = "on" if _truthy(config.get("enabled", True)) else "off"
+    config_error = _config_error()
+    if config_error:
+        state = f"NOT ROUTING (config unreadable: {config_error})"
     pending_state = "on" if _truthy(config.get("pending_intent_enabled", True)) else "off"
     active_pending = _active_pending_intent_count()
     return (
@@ -2145,6 +2236,15 @@ def _session_key_for(event, gateway, session_store=None) -> str:
     if source is None:
         return ""
 
+    # The host rewrites some sources (Telegram topic recovery) before deriving
+    # the key its turn reads; use the same view or the override lands nowhere.
+    normalizer = getattr(gateway, "_normalize_source_for_session_key", None)
+    if callable(normalizer):
+        try:
+            source = normalizer(source) or source
+        except Exception:
+            logger.debug("reasoning-router: source normalization failed", exc_info=True)
+
     resolver = getattr(gateway, "_session_key_for_source", None)
     if callable(resolver):
         try:
@@ -2169,10 +2269,21 @@ _ORIGIN_PREFIX_RE = re.compile(
     r".*?\n(?:Do not guess a reply destination[^\n]*\n)?\s*",
     re.S,
 )
-_OOB_RE = re.compile(
-    r"^\s*\[OUT-OF-BAND USER MESSAGE[^\]]*\]\s*\n(.*?)\n\s*\[/OUT-OF-BAND USER MESSAGE\]\s*$",
-    re.S,
-)
+_OOB_OPEN = "[OUT-OF-BAND USER MESSAGE"
+_OOB_CLOSE = "[/OUT-OF-BAND USER MESSAGE]"
+
+
+def _unwrap_oob(text: str) -> str | None:
+    """Return the body of a steering wrapper, or None. Plain string ops: no backtracking."""
+    stripped = text.strip()
+    if not stripped.startswith(_OOB_OPEN) or not stripped.endswith(_OOB_CLOSE):
+        return None
+    header_end = stripped.find("]")
+    newline = stripped.find("\n", header_end)
+    if header_end < 0 or newline < 0 or stripped[header_end + 1 : newline].strip():
+        return None
+    body = stripped[newline + 1 : len(stripped) - len(_OOB_CLOSE)]
+    return body.rstrip(" \t").removesuffix("\n")
 
 
 def _strip_gateway_wrappers(text: str) -> str:
@@ -2185,9 +2296,9 @@ def _strip_gateway_wrappers(text: str) -> str:
     for _ in range(3):
         before = out
         out = _ORIGIN_PREFIX_RE.sub("", out, count=1)
-        m = _OOB_RE.match(out)
-        if m:
-            out = m.group(1)
+        body = _unwrap_oob(out)
+        if body is not None:
+            out = body
         if out == before:
             break
     return out
@@ -2264,6 +2375,18 @@ def _release_router_override(gateway, session_key: str) -> bool:
 
 def _is_reasoning_slash_command(text: str) -> bool:
     return bool(re.match(r"^\s*/reasoning(?:@\S+)?(?:\s|$)", text or "", re.I))
+
+
+_REASONING_SETTING_ARGS = frozenset(EFFORT_ORDER) | frozenset(EFFORT_ALIASES) | {"reset", "default", "auto"}
+
+
+def _reasoning_command_changes_override(text: str) -> bool:
+    """True for /reasoning <level>|reset; False for display toggles or bare /reasoning."""
+    parts = (text or "").strip().split()[1:]
+    args = [part.lower() for part in parts if not part.startswith("-")]
+    if not args:
+        return False
+    return args[0] in _REASONING_SETTING_ARGS
 
 
 def _looks_like_slash_command(text: str) -> bool:
