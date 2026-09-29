@@ -908,9 +908,8 @@ def _route_short_or_plain(normalized: str, lowered: str, cfg: dict[str, Any]) ->
         return _clamp_effort("high", cfg), "go-ahead for several steps"
     if _BUILD_ARTIFACT_RE.search(_strip_request_prefix(lowered)) and not _is_pure_question(lowered):
         return _clamp_effort("high", cfg), "request to write or build something new"
-    if _is_imperative_request(lowered):
-        if _mentions_live_system(lowered, cfg) or len(normalized) > 40:
-            return _clamp_effort("medium", cfg), "short request to change or build something"
+    if _is_imperative_request(lowered) and (_mentions_live_system(lowered, cfg) or len(normalized) > 40):
+        return _clamp_effort("medium", cfg), "short request to change or build something"
     if _OPTION_PICK_RE.match(lowered):
         return _clamp_effort("medium", cfg), "picked one of the offered options"
     if _BARE_CONTINUE_RE.match(lowered):
@@ -1747,16 +1746,15 @@ def _is_social_aside(lowered: str) -> bool:
     if _matches(_COMPILED_TROUBLESHOOT, _strip_negated_clauses(text)) or _matches(_COMPILED_RESEARCH, text):
         return False
     core = _strip_request_prefix(text[start.end():] if start else text)
-    if _IMPERATIVE_VERB_RE.match(core):
-        return False
-    return True
+    return not _IMPERATIVE_VERB_RE.match(core)
 
 
 def _risk_noun_in_context(risk_lowered: str) -> bool:
     """Security or incident nouns only count as risk next to a technical verb or object."""
-    if _XHIGH_SECURITY_NOUN_RE.search(risk_lowered):
-        if _SECURITY_CHANGE_VERB_RE.search(risk_lowered) or _TECH_CONTEXT_RE.search(risk_lowered):
-            return True
+    if _XHIGH_SECURITY_NOUN_RE.search(risk_lowered) and (
+        _SECURITY_CHANGE_VERB_RE.search(risk_lowered) or _TECH_CONTEXT_RE.search(risk_lowered)
+    ):
+        return True
     if _XHIGH_EVENT_NOUN_RE.search(risk_lowered):
         if re.search(r"\b(?:prod|production)\s+(?:incident|outage)\b", risk_lowered):
             return True
