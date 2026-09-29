@@ -75,6 +75,8 @@ The default router clamp remains `max: xhigh` for backward compatibility and pre
 ├── scripts/minilm_router_eval.py   # offline MiniLM/nearest-neighbor evaluator POC
 ├── tests/test_reasoning_router.py  # focused regression tests
 ├── tests/test_minilm_router_eval.py
+├── eval/evaluate.py                # reproducible routing accuracy on the synthetic sets
+├── eval/{tuning,holdout,adversarial}.json
 └── README.md
 ```
 
@@ -403,6 +405,16 @@ From this repository:
 python -m py_compile __init__.py scripts/minilm_router_eval.py
 python -m pytest -q tests -o 'addopts='
 ```
+
+### Routing accuracy
+
+`eval/` holds three synthetic labeled sets: `tuning.json` (160 messages used while tuning the rules), `holdout.json` (150 messages kept out of tuning), and `adversarial.json` (118 misroutes found in an adversarial pass, each with an accepted effort range). They are paraphrased and contain no real chat text. To reproduce the numbers:
+
+```bash
+python eval/evaluate.py          # add --show to print every miss
+```
+
+The script loads the plugin with `eval/config.yaml` in a temporary `HERMES_HOME`, sends every labeled message through `pre_gateway_dispatch` on a fake gateway, and scores the adversarial set with `classify_message`. The semantic classifier stays off, so the results are deterministic. Current results: tuning 154/160 (96.2%), holdout 143/150 (95.3%), adversarial 118/118. `tests/test_eval_sets.py` fails if those numbers drop.
 
 ## LLM install prompt
 

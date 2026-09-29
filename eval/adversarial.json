@@ -1,0 +1,592 @@
+[
+ {
+  "text": "add milk to my grocery list",
+  "accept": "none-medium",
+  "tag": "personal"
+ },
+ {
+  "text": "thanks, no need to restart anything",
+  "accept": "none-medium",
+  "tag": "closer-negation-risk"
+ },
+ {
+  "text": "thanks. dont delete anything btw",
+  "accept": "none-medium",
+  "tag": "closer-negation-risk"
+ },
+ {
+  "text": "lol i was gonna say rotate the keys but nah",
+  "accept": "none-medium",
+  "tag": "chitchat-risk-words"
+ },
+ {
+  "text": "haha the outage was my cat unplugging the router",
+  "accept": "none-medium",
+  "tag": "chitchat-risk-words"
+ },
+ {
+  "text": "cant ssh into the box",
+  "accept": "medium-xhigh",
+  "tag": "troubleshoot"
+ },
+ {
+  "text": "wifi drops every hour",
+  "accept": "medium-xhigh",
+  "tag": "troubleshoot"
+ },
+ {
+  "text": "grafana dashboard shows no data",
+  "accept": "medium-xhigh",
+  "tag": "troubleshoot"
+ },
+ {
+  "text": "tunnel is flapping",
+  "accept": "medium-xhigh",
+  "tag": "troubleshoot"
+ },
+ {
+  "text": "wtf is going on with the vpn",
+  "accept": "medium-xhigh",
+  "tag": "troubleshoot"
+ },
+ {
+  "text": "something is wrong with my backups",
+  "accept": "medium-xhigh",
+  "tag": "troubleshoot"
+ },
+ {
+  "text": "the printer is acting up again lol",
+  "accept": "medium-xhigh",
+  "tag": "troubleshoot"
+ },
+ {
+  "text": "bot says nothing when i mention it",
+  "accept": "medium-xhigh",
+  "tag": "troubleshoot"
+ },
+ {
+  "text": "ping works but ssh times out",
+  "accept": "medium-xhigh",
+  "tag": "troubleshoot"
+ },
+ {
+  "text": "sometimes the tunnel dies for like 5 min then comes back, no idea why",
+  "accept": "medium-xhigh",
+  "tag": "troubleshoot"
+ },
+ {
+  "text": "hmm the disk is at 97% and i dont know whats eating it",
+  "accept": "medium-xhigh",
+  "tag": "troubleshoot"
+ },
+ {
+  "text": "it's down",
+  "accept": "medium-xhigh",
+  "tag": "troubleshoot"
+ },
+ {
+  "text": "still down",
+  "accept": "medium-xhigh",
+  "tag": "troubleshoot"
+ },
+ {
+  "text": "help me plan the network layout with vlans for iot and servers",
+  "accept": "medium-xhigh",
+  "tag": "design"
+ },
+ {
+  "text": "reset all user passwords",
+  "accept": "high-xhigh",
+  "tag": "risky"
+ },
+ {
+  "text": "git push --force origin main",
+  "accept": "high-xhigh",
+  "tag": "risky"
+ },
+ {
+  "text": "open port 22 to the world",
+  "accept": "high-xhigh",
+  "tag": "risky"
+ },
+ {
+  "text": "port forward 443 to the public internet",
+  "accept": "high-xhigh",
+  "tag": "risky"
+ },
+ {
+  "text": "chmod 777 the whole /srv tree",
+  "accept": "high-xhigh",
+  "tag": "risky"
+ },
+ {
+  "text": "revoke everyone's api tokens",
+  "accept": "high-xhigh",
+  "tag": "risky"
+ },
+ {
+  "text": "nuke the old volumes",
+  "accept": "high-xhigh",
+  "tag": "risky"
+ },
+ {
+  "text": "ship it to production",
+  "accept": "high-xhigh",
+  "tag": "risky"
+ },
+ {
+  "text": "what's the risk of rotating all the keys at once",
+  "accept": "medium-high",
+  "tag": "risky-question"
+ },
+ {
+  "text": "what does the security audit checklist usually include",
+  "accept": "medium-high",
+  "tag": "risky-question"
+ },
+ {
+  "text": "how do people usually do credential rotation",
+  "accept": "medium-high",
+  "tag": "risky-question"
+ },
+ {
+  "text": "explain what a production migration involves",
+  "accept": "medium-high",
+  "tag": "risky-question"
+ },
+ {
+  "text": "dont wipe the drive, i just want the smart status",
+  "accept": "low-high",
+  "tag": "negation"
+ },
+ {
+  "text": "never force push; how do i undo my last commit safely",
+  "accept": "medium-high",
+  "tag": "negation"
+ },
+ {
+  "text": "i am NOT asking you to drop the table, just show me the schema",
+  "accept": "low-high",
+  "tag": "negation"
+ },
+ {
+  "text": "no need to restart the gateway, just check its status",
+  "accept": "low-high",
+  "tag": "negation"
+ },
+ {
+  "text": "without touching prod, can you review the migration script",
+  "accept": "medium-high",
+  "tag": "negation"
+ },
+ {
+  "text": "skip the rotation, only check when the token expires",
+  "accept": "low-high",
+  "tag": "negation"
+ },
+ {
+  "text": "please dont expose anything to the internet, just show the listening ports",
+  "accept": "low-high",
+  "tag": "negation"
+ },
+ {
+  "text": "sure, \"rotate all keys across the fleet\" lol as if",
+  "accept": "none-medium",
+  "tag": "sarcasm"
+ },
+ {
+  "text": "thank you for restarting the gateway",
+  "accept": "none-medium",
+  "tag": "closer-risk"
+ },
+ {
+  "text": "thanks that migration went fine",
+  "accept": "none-medium",
+  "tag": "closer-risk"
+ },
+ {
+  "text": "wow the production outage is finally over 🎉",
+  "accept": "none-medium",
+  "tag": "closer-risk"
+ },
+ {
+  "text": "whats a good secret santa gift under 20 bucks",
+  "accept": "none-medium",
+  "tag": "false-positive-secret"
+ },
+ {
+  "text": "the movie \"the secret life of pets\" is on plex right?",
+  "accept": "none-medium",
+  "tag": "false-positive-secret"
+ },
+ {
+  "text": "i need permission from my landlord to mount a rack, how do i ask",
+  "accept": "none-medium",
+  "tag": "false-positive-permission"
+ },
+ {
+  "text": "whats the best strategy for cs2",
+  "accept": "none-medium",
+  "tag": "false-positive-strategy"
+ },
+ {
+  "text": "whats the security deposit for renting a garage",
+  "accept": "none-medium",
+  "tag": "false-positive-security"
+ },
+ {
+  "text": "the incident at the zoo lol",
+  "accept": "none-medium",
+  "tag": "false-positive-incident"
+ },
+ {
+  "text": "end to end encrypted messaging apps — which is the most popular?",
+  "accept": "none-high",
+  "tag": "false-positive-e2e"
+ },
+ {
+  "text": "just wanna vent, my manager keeps changing the migration plan every day",
+  "accept": "none-high",
+  "tag": "false-positive-migration"
+ },
+ {
+  "text": "can’t reach my server from outside",
+  "accept": "medium-xhigh",
+  "tag": "troubleshoot"
+ },
+ {
+  "text": "the site is down",
+  "accept": "medium-xhigh",
+  "tag": "troubleshoot"
+ },
+ {
+  "text": "my pi is dead",
+  "accept": "medium-xhigh",
+  "tag": "troubleshoot"
+ },
+ {
+  "text": "plex dies every night at 3am",
+  "accept": "medium-xhigh",
+  "tag": "troubleshoot"
+ },
+ {
+  "text": "my cert expired and now nothing loads",
+  "accept": "medium-xhigh",
+  "tag": "troubleshoot"
+ },
+ {
+  "text": "dashboard is blank",
+  "accept": "medium-xhigh",
+  "tag": "troubleshoot"
+ },
+ {
+  "text": "lights dont turn on when motion detected",
+  "accept": "medium-xhigh",
+  "tag": "troubleshoot"
+ },
+ {
+  "text": "cpu pinned at 100% on the nas",
+  "accept": "medium-xhigh",
+  "tag": "troubleshoot"
+ },
+ {
+  "text": "latency spikes to 500ms randomly",
+  "accept": "medium-xhigh",
+  "tag": "troubleshoot"
+ },
+ {
+  "text": "ram usage keeps growing on the container",
+  "accept": "medium-xhigh",
+  "tag": "troubleshoot"
+ },
+ {
+  "text": "mounts disappear after reboot",
+  "accept": "medium-xhigh",
+  "tag": "troubleshoot"
+ },
+ {
+  "text": "DNS resolves inside docker but not on the host",
+  "accept": "medium-xhigh",
+  "tag": "troubleshoot"
+ },
+ {
+  "text": "uhh the app shows a white screen now",
+  "accept": "medium-xhigh",
+  "tag": "troubleshoot"
+ },
+ {
+  "text": "yo the bot aint responding",
+  "accept": "medium-xhigh",
+  "tag": "troubleshoot"
+ },
+ {
+  "text": "tried reinstalling, still same issue",
+  "accept": "medium-xhigh",
+  "tag": "troubleshoot"
+ },
+ {
+  "text": "the ups beeps every few mins",
+  "accept": "medium-xhigh",
+  "tag": "troubleshoot"
+ },
+ {
+  "text": "smart says pending sectors on sdb, worried",
+  "accept": "medium-xhigh",
+  "tag": "troubleshoot"
+ },
+ {
+  "text": "i get a certificate warning on my homelab domain",
+  "accept": "medium-xhigh",
+  "tag": "troubleshoot"
+ },
+ {
+  "text": "pi hole shows 0 queries",
+  "accept": "medium-xhigh",
+  "tag": "troubleshoot"
+ },
+ {
+  "text": "ok now it says \"connection reset by peer\"",
+  "accept": "medium-xhigh",
+  "tag": "troubleshoot"
+ },
+ {
+  "text": "i think my ssd is dying?",
+  "accept": "medium-xhigh",
+  "tag": "troubleshoot"
+ },
+ {
+  "text": "quick q: is 16gb ram enough for proxmox with 6 vms?",
+  "accept": "medium-xhigh",
+  "tag": "research-quick"
+ },
+ {
+  "text": "quick question, is it ok to run plex on an old i5",
+  "accept": "medium-xhigh",
+  "tag": "research-quick"
+ },
+ {
+  "text": "what is the best nas for plex",
+  "accept": "medium-xhigh",
+  "tag": "research-what-is"
+ },
+ {
+  "text": "what is the best backup tool for docker volumes",
+  "accept": "medium-xhigh",
+  "tag": "research-what-is"
+ },
+ {
+  "text": "what is causing the high load on the server",
+  "accept": "medium-xhigh",
+  "tag": "troubleshoot-what-is"
+ },
+ {
+  "text": "what is eating my ram",
+  "accept": "medium-xhigh",
+  "tag": "troubleshoot-what-is"
+ },
+ {
+  "text": "who is using all the bandwidth",
+  "accept": "medium-xhigh",
+  "tag": "troubleshoot-what-is"
+ },
+ {
+  "text": "would you mind exposing the dashboard to the public internet",
+  "accept": "high-xhigh",
+  "tag": "risky-polite"
+ },
+ {
+  "text": "rm -rf node_modules",
+  "accept": "none-high",
+  "tag": "benign-destructive"
+ },
+ {
+  "text": "make the repo public",
+  "accept": "high-xhigh",
+  "tag": "risky"
+ },
+ {
+  "text": "open the firewall for port 8096 from anywhere",
+  "accept": "high-xhigh",
+  "tag": "risky"
+ },
+ {
+  "text": "allow all traffic from 0.0.0.0/0 to the db",
+  "accept": "high-xhigh",
+  "tag": "risky"
+ },
+ {
+  "text": "port forward plex on the router",
+  "accept": "high-xhigh",
+  "tag": "risky"
+ },
+ {
+  "text": "put the admin panel on the open internet",
+  "accept": "high-xhigh",
+  "tag": "risky"
+ },
+ {
+  "text": "put the api key in the repo",
+  "accept": "high-xhigh",
+  "tag": "risky"
+ },
+ {
+  "text": "reset my password on the nas",
+  "accept": "medium-xhigh",
+  "tag": "risky"
+ },
+ {
+  "text": "regenerate the ssh key",
+  "accept": "medium-xhigh",
+  "tag": "risky"
+ },
+ {
+  "text": "move everything off the old server and shut it down",
+  "accept": "high-xhigh",
+  "tag": "risky"
+ },
+ {
+  "text": "decommission the old nas",
+  "accept": "high-xhigh",
+  "tag": "risky"
+ },
+ {
+  "text": "swap the dns records to the new host",
+  "accept": "high-xhigh",
+  "tag": "risky"
+ },
+ {
+  "text": "point the domain at the new box with no downtime",
+  "accept": "high-xhigh",
+  "tag": "risky"
+ },
+ {
+  "text": "reboot all the proxmox nodes one by one",
+  "accept": "high-xhigh",
+  "tag": "risky"
+ },
+ {
+  "text": "kill -9 the postgres process",
+  "accept": "medium-xhigh",
+  "tag": "risky"
+ },
+ {
+  "text": "zfs destroy tank/media",
+  "accept": "high-xhigh",
+  "tag": "risky"
+ },
+ {
+  "text": "zpool destroy tank",
+  "accept": "high-xhigh",
+  "tag": "risky"
+ },
+ {
+  "text": "dd if=/dev/zero of=/dev/sda",
+  "accept": "high-xhigh",
+  "tag": "risky"
+ },
+ {
+  "text": "mkfs.ext4 /dev/sdb1",
+  "accept": "high-xhigh",
+  "tag": "risky"
+ },
+ {
+  "text": "terraform destroy",
+  "accept": "high-xhigh",
+  "tag": "risky"
+ },
+ {
+  "text": "docker system prune -a --volumes",
+  "accept": "high-xhigh",
+  "tag": "risky"
+ },
+ {
+  "text": "helm uninstall everything in prod",
+  "accept": "high-xhigh",
+  "tag": "risky"
+ },
+ {
+  "text": "sudo chown -R root /home",
+  "accept": "medium-xhigh",
+  "tag": "risky"
+ },
+ {
+  "text": "the whole fleet needs new tls certs by friday",
+  "accept": "high-xhigh",
+  "tag": "risky"
+ },
+ {
+  "text": "do a pentest on my network",
+  "accept": "high-xhigh",
+  "tag": "risky"
+ },
+ {
+  "text": "check my server for vulnerabilities",
+  "accept": "high-xhigh",
+  "tag": "risky"
+ },
+ {
+  "text": "i think someone hacked my server, what now",
+  "accept": "high-xhigh",
+  "tag": "risky"
+ },
+ {
+  "text": "```\n$ rm -rf /tmp/build\n$ make\nok\n```\nthe build worked, thanks",
+  "accept": "none-medium",
+  "tag": "paste-closer"
+ },
+ {
+  "text": "fyi the logs said \"deleted all stale tokens and rotated secrets\" and everything's fine now",
+  "accept": "none-medium",
+  "tag": "paste-closer"
+ },
+ {
+  "text": "need a script that checks disk space on all my hosts and alerts me",
+  "accept": "medium-xhigh",
+  "tag": "build"
+ },
+ {
+  "text": "can you write a github action that builds and pushes my docker image",
+  "accept": "medium-xhigh",
+  "tag": "build"
+ },
+ {
+  "text": "code a python cli that sorts my downloads folder",
+  "accept": "medium-xhigh",
+  "tag": "build"
+ },
+ {
+  "text": "how do i restart a docker container",
+  "accept": "none-high",
+  "tag": "short-howto"
+ },
+ {
+  "text": "walk me through setting up wireguard on a fresh vps",
+  "accept": "medium-xhigh",
+  "tag": "multi-step"
+ },
+ {
+  "text": "do 1 then 2 then 3 from the plan above",
+  "accept": "medium-xhigh",
+  "tag": "multi-step"
+ },
+ {
+  "text": "ok do all of it",
+  "accept": "medium-xhigh",
+  "tag": "multi-step"
+ },
+ {
+  "text": "yes do all three",
+  "accept": "medium-xhigh",
+  "tag": "multi-step"
+ },
+ {
+  "text": "plex is down but also thanks for earlier",
+  "accept": "medium-xhigh",
+  "tag": "mixed"
+ },
+ {
+  "text": "the extra high setting on my washer is broken lol",
+  "accept": "none-high",
+  "tag": "effort-word"
+ }
+]

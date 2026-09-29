@@ -1,0 +1,1349 @@
+[
+ {
+  "text": "thanks",
+  "accept": [
+   "low"
+  ],
+  "category": "chitchat",
+  "context": "idle"
+ },
+ {
+  "text": "thx",
+  "accept": [
+   "low"
+  ],
+  "category": "chitchat",
+  "context": "idle"
+ },
+ {
+  "text": "lol",
+  "accept": [
+   "low"
+  ],
+  "category": "chitchat",
+  "context": "idle"
+ },
+ {
+  "text": "ok cool",
+  "accept": [
+   "low"
+  ],
+  "category": "chitchat",
+  "context": "idle"
+ },
+ {
+  "text": "nice",
+  "accept": [
+   "low"
+  ],
+  "category": "chitchat",
+  "context": "idle"
+ },
+ {
+  "text": "haha nice one",
+  "accept": [
+   "low"
+  ],
+  "category": "chitchat",
+  "context": "idle"
+ },
+ {
+  "text": "perfect",
+  "accept": [
+   "low"
+  ],
+  "category": "chitchat",
+  "context": "idle"
+ },
+ {
+  "text": "got it",
+  "accept": [
+   "low"
+  ],
+  "category": "chitchat",
+  "context": "idle"
+ },
+ {
+  "text": "awesome thanks",
+  "accept": [
+   "low"
+  ],
+  "category": "chitchat",
+  "context": "idle"
+ },
+ {
+  "text": "k",
+  "accept": [
+   "low"
+  ],
+  "category": "chitchat",
+  "context": "idle"
+ },
+ {
+  "text": "cool cool",
+  "accept": [
+   "low"
+  ],
+  "category": "chitchat",
+  "context": "idle"
+ },
+ {
+  "text": "ty",
+  "accept": [
+   "low"
+  ],
+  "category": "chitchat",
+  "context": "idle"
+ },
+ {
+  "text": "lmao",
+  "accept": [
+   "low"
+  ],
+  "category": "chitchat",
+  "context": "idle"
+ },
+ {
+  "text": "sweet",
+  "accept": [
+   "low"
+  ],
+  "category": "chitchat",
+  "context": "idle"
+ },
+ {
+  "text": "ok thanks man",
+  "accept": [
+   "low"
+  ],
+  "category": "chitchat",
+  "context": "idle"
+ },
+ {
+  "text": "good morning",
+  "accept": [
+   "low"
+  ],
+  "category": "chitchat",
+  "context": "idle"
+ },
+ {
+  "text": "gm",
+  "accept": [
+   "low"
+  ],
+  "category": "chitchat",
+  "context": "idle"
+ },
+ {
+  "text": "yo",
+  "accept": [
+   "low"
+  ],
+  "category": "chitchat",
+  "context": "idle"
+ },
+ {
+  "text": "you there?",
+  "accept": [
+   "low"
+  ],
+  "category": "chitchat",
+  "context": "idle"
+ },
+ {
+  "text": "appreciate it",
+  "accept": [
+   "low"
+  ],
+  "category": "chitchat",
+  "context": "idle"
+ },
+ {
+  "text": "nvm figured it out",
+  "accept": [
+   "low"
+  ],
+  "category": "chitchat",
+  "context": "idle"
+ },
+ {
+  "text": "hah yeah",
+  "accept": [
+   "low"
+  ],
+  "category": "chitchat",
+  "context": "idle"
+ },
+ {
+  "text": "love it",
+  "accept": [
+   "low"
+  ],
+  "category": "chitchat",
+  "context": "idle"
+ },
+ {
+  "text": "alright sounds good",
+  "accept": [
+   "low"
+  ],
+  "category": "chitchat",
+  "context": "idle"
+ },
+ {
+  "text": "oh nice that worked",
+  "accept": [
+   "low"
+  ],
+  "category": "chitchat",
+  "context": "idle"
+ },
+ {
+  "text": "what time is it in tokyo",
+  "accept": [
+   "low"
+  ],
+  "category": "lookup",
+  "context": "idle"
+ },
+ {
+  "text": "whats on my calendar tomorrow",
+  "accept": [
+   "low"
+  ],
+  "category": "lookup",
+  "context": "idle"
+ },
+ {
+  "text": "what day is it",
+  "accept": [
+   "low"
+  ],
+  "category": "lookup",
+  "context": "idle"
+ },
+ {
+  "text": "how many reminders do i have today",
+  "accept": [
+   "low"
+  ],
+  "category": "lookup",
+  "context": "idle"
+ },
+ {
+  "text": "whats the date next friday",
+  "accept": [
+   "low"
+  ],
+  "category": "lookup",
+  "context": "idle"
+ },
+ {
+  "text": "what time is sunrise tmrw",
+  "accept": [
+   "low"
+  ],
+  "category": "lookup",
+  "context": "idle"
+ },
+ {
+  "text": "whats 15% of 240",
+  "accept": [
+   "low"
+  ],
+  "category": "lookup",
+  "context": "idle"
+ },
+ {
+  "text": "convert 72f to c",
+  "accept": [
+   "low"
+  ],
+  "category": "lookup",
+  "context": "idle"
+ },
+ {
+  "text": "which port is jellyfin on again",
+  "accept": [
+   "low",
+   "medium"
+  ],
+  "category": "lookup",
+  "context": "idle"
+ },
+ {
+  "text": "whats the hostname of the media box",
+  "accept": [
+   "low",
+   "medium"
+  ],
+  "category": "lookup",
+  "context": "idle"
+ },
+ {
+  "text": "when does the nightly backup cron run",
+  "accept": [
+   "low",
+   "medium"
+  ],
+  "category": "lookup",
+  "context": "idle"
+ },
+ {
+  "text": "what version of docker is on the main server",
+  "accept": [
+   "low",
+   "medium"
+  ],
+  "category": "lookup",
+  "context": "idle"
+ },
+ {
+  "text": "how much disk is left on the nas",
+  "accept": [
+   "low",
+   "medium"
+  ],
+  "category": "lookup",
+  "context": "idle"
+ },
+ {
+  "text": "list my cron jobs",
+  "accept": [
+   "low",
+   "medium"
+  ],
+  "category": "lookup",
+  "context": "idle"
+ },
+ {
+  "text": "whats my next reminder",
+  "accept": [
+   "low",
+   "medium"
+  ],
+  "category": "lookup",
+  "context": "idle"
+ },
+ {
+  "text": "when was the last commit on the docs repo",
+  "accept": [
+   "low",
+   "medium"
+  ],
+  "category": "lookup",
+  "context": "idle"
+ },
+ {
+  "text": "how many movies are in radarr right now",
+  "accept": [
+   "medium"
+  ],
+  "category": "lookup",
+  "context": "idle"
+ },
+ {
+  "text": "whats the uptime on the paas box",
+  "accept": [
+   "medium"
+  ],
+  "category": "lookup",
+  "context": "idle"
+ },
+ {
+  "text": "which containers are running on the small server",
+  "accept": [
+   "medium"
+  ],
+  "category": "lookup",
+  "context": "idle"
+ },
+ {
+  "text": "show me the last 5 discord dms the bot got",
+  "accept": [
+   "medium"
+  ],
+  "category": "lookup",
+  "context": "idle"
+ },
+ {
+  "text": "why is plex buffering",
+  "accept": [
+   "medium"
+  ],
+  "category": "troubleshoot",
+  "context": "idle"
+ },
+ {
+  "text": "the bot isnt online",
+  "accept": [
+   "medium"
+  ],
+  "category": "troubleshoot",
+  "context": "idle"
+ },
+ {
+  "text": "dms arent showing up",
+  "accept": [
+   "medium"
+  ],
+  "category": "troubleshoot",
+  "context": "idle"
+ },
+ {
+  "text": "whats wrong with the backup",
+  "accept": [
+   "medium"
+  ],
+  "category": "troubleshoot",
+  "context": "idle"
+ },
+ {
+  "text": "jellyfin says no playable streams for this one show",
+  "accept": [
+   "medium"
+  ],
+  "category": "troubleshoot",
+  "context": "idle"
+ },
+ {
+  "text": "why is the dashboard slow today",
+  "accept": [
+   "medium"
+  ],
+  "category": "troubleshoot",
+  "context": "idle"
+ },
+ {
+  "text": "cron didnt fire last night",
+  "accept": [
+   "medium"
+  ],
+  "category": "troubleshoot",
+  "context": "idle"
+ },
+ {
+  "text": "why did my reminder not go off",
+  "accept": [
+   "medium"
+  ],
+  "category": "troubleshoot",
+  "context": "idle"
+ },
+ {
+  "text": "docker container keeps restarting on the small server",
+  "accept": [
+   "medium"
+  ],
+  "category": "troubleshoot",
+  "context": "idle"
+ },
+ {
+  "text": "the smart home lights arent responding",
+  "accept": [
+   "medium"
+  ],
+  "category": "troubleshoot",
+  "context": "idle"
+ },
+ {
+  "text": "dns not resolving for the media subdomain",
+  "accept": [
+   "medium"
+  ],
+  "category": "troubleshoot",
+  "context": "idle"
+ },
+ {
+  "text": "why is the disk almost full again",
+  "accept": [
+   "medium"
+  ],
+  "category": "troubleshoot",
+  "context": "idle"
+ },
+ {
+  "text": "plex transcoding pegging cpu and stuttering, whats going on",
+  "accept": [
+   "medium",
+   "high"
+  ],
+  "category": "troubleshoot",
+  "context": "idle"
+ },
+ {
+  "text": "backup job failed 3 nights in a row, figure out why",
+  "accept": [
+   "medium",
+   "high"
+  ],
+  "category": "troubleshoot",
+  "context": "idle"
+ },
+ {
+  "text": "paas deploy keeps failing at build step",
+  "accept": [
+   "medium",
+   "high"
+  ],
+  "category": "troubleshoot",
+  "context": "idle"
+ },
+ {
+  "text": "github actions red on main, whats broken",
+  "accept": [
+   "medium",
+   "high"
+  ],
+  "category": "troubleshoot",
+  "context": "idle"
+ },
+ {
+  "text": "the gateway keeps disconnecting every few hours, no idea why",
+  "accept": [
+   "medium",
+   "high"
+  ],
+  "category": "troubleshoot",
+  "context": "idle"
+ },
+ {
+  "text": "sonarr not importing anything since yesterday",
+  "accept": [
+   "medium",
+   "high"
+  ],
+  "category": "troubleshoot",
+  "context": "idle"
+ },
+ {
+  "text": "tailscale node shows offline but the box is up",
+  "accept": [
+   "medium",
+   "high"
+  ],
+  "category": "troubleshoot",
+  "context": "idle"
+ },
+ {
+  "text": "bot replies twice to every message now",
+  "accept": [
+   "medium",
+   "high"
+  ],
+  "category": "troubleshoot",
+  "context": "idle"
+ },
+ {
+  "text": "ssl cert expired on one of the sites i think, check it",
+  "accept": [
+   "medium",
+   "high"
+  ],
+  "category": "troubleshoot",
+  "context": "idle"
+ },
+ {
+  "text": "hermes cron jobs all say failed since the update",
+  "accept": [
+   "medium",
+   "high"
+  ],
+  "category": "troubleshoot",
+  "context": "idle"
+ },
+ {
+  "text": "memory on the main server keeps climbing until oom kills stuff, find the leak",
+  "accept": [
+   "high"
+  ],
+  "category": "troubleshoot",
+  "context": "idle"
+ },
+ {
+  "text": "random 502s from the proxy about every 10 mins, dig into it and tell me the root cause",
+  "accept": [
+   "high"
+  ],
+  "category": "troubleshoot",
+  "context": "idle"
+ },
+ {
+  "text": "containers cant reach each other after i restarted docker, and dns inside them is broken too",
+  "accept": [
+   "high"
+  ],
+  "category": "troubleshoot",
+  "context": "idle"
+ },
+ {
+  "text": "add a cron that pings me if disk goes over 85%",
+  "accept": [
+   "high"
+  ],
+  "category": "implementation",
+  "context": "idle"
+ },
+ {
+  "text": "set up a nightly backup of the jellyfin config to the nas",
+  "accept": [
+   "high"
+  ],
+  "category": "implementation",
+  "context": "idle"
+ },
+ {
+  "text": "make the bot post a daily digest in the ops channel at 8am",
+  "accept": [
+   "high"
+  ],
+  "category": "implementation",
+  "context": "idle"
+ },
+ {
+  "text": "add a new subdomain for the wiki and point it at the container",
+  "accept": [
+   "high"
+  ],
+  "category": "implementation",
+  "context": "idle"
+ },
+ {
+  "text": "write a script that prunes docker images older than 30 days",
+  "accept": [
+   "high"
+  ],
+  "category": "implementation",
+  "context": "idle"
+ },
+ {
+  "text": "change the plex library scan to run every 6 hours",
+  "accept": [
+   "high"
+  ],
+  "category": "implementation",
+  "context": "idle"
+ },
+ {
+  "text": "add a healthcheck to the compose file for the db container",
+  "accept": [
+   "high"
+  ],
+  "category": "implementation",
+  "context": "idle"
+ },
+ {
+  "text": "update the readme in the docs repo with the new env vars",
+  "accept": [
+   "high"
+  ],
+  "category": "implementation",
+  "context": "idle"
+ },
+ {
+  "text": "add a retry with backoff to the webhook sender",
+  "accept": [
+   "high"
+  ],
+  "category": "implementation",
+  "context": "idle"
+ },
+ {
+  "text": "make a reminder every monday for trash day",
+  "accept": [
+   "high"
+  ],
+  "category": "implementation",
+  "context": "idle"
+ },
+ {
+  "text": "hook up a discord alert when a deploy fails",
+  "accept": [
+   "high"
+  ],
+  "category": "implementation",
+  "context": "idle"
+ },
+ {
+  "text": "refactor the notification module so channels are pluggable",
+  "accept": [
+   "high"
+  ],
+  "category": "implementation",
+  "context": "idle"
+ },
+ {
+  "text": "bump all the docker images in the media stack to latest tags and redeploy",
+  "accept": [
+   "high"
+  ],
+  "category": "implementation",
+  "context": "idle"
+ },
+ {
+  "text": "set up log rotation for the bot logs",
+  "accept": [
+   "high"
+  ],
+  "category": "implementation",
+  "context": "idle"
+ },
+ {
+  "text": "add a slash command to restart a container from discord",
+  "accept": [
+   "high"
+  ],
+  "category": "implementation",
+  "context": "idle"
+ },
+ {
+  "text": "create a github action that runs lint and tests on every pr",
+  "accept": [
+   "high"
+  ],
+  "category": "implementation",
+  "context": "idle"
+ },
+ {
+  "text": "move the cron jobs from the old box config into the new scheduler format",
+  "accept": [
+   "high"
+  ],
+  "category": "implementation",
+  "context": "idle"
+ },
+ {
+  "text": "add rate limiting to the public api endpoint",
+  "accept": [
+   "high"
+  ],
+  "category": "implementation",
+  "context": "idle"
+ },
+ {
+  "text": "write a python script to dedupe my home videos folder by hash",
+  "accept": [
+   "high"
+  ],
+  "category": "implementation",
+  "context": "idle"
+ },
+ {
+  "text": "setup a uptime monitor for each service and alert to discord",
+  "accept": [
+   "high"
+  ],
+  "category": "implementation",
+  "context": "idle"
+ },
+ {
+  "text": "make the calendar sync also pull the shared family calendar",
+  "accept": [
+   "high"
+  ],
+  "category": "implementation",
+  "context": "idle"
+ },
+ {
+  "text": "add a dark mode toggle to the dashboard",
+  "accept": [
+   "high"
+  ],
+  "category": "implementation",
+  "context": "idle"
+ },
+ {
+  "text": "turn on hardware transcoding for jellyfin and verify it works",
+  "accept": [
+   "high"
+  ],
+  "category": "implementation",
+  "context": "idle"
+ },
+ {
+  "text": "write tests for the backup script",
+  "accept": [
+   "high"
+  ],
+  "category": "implementation",
+  "context": "idle"
+ },
+ {
+  "text": "change the default model for cron jobs to the cheaper one and make sure nothing breaks",
+  "accept": [
+   "high"
+  ],
+  "category": "implementation",
+  "context": "idle"
+ },
+ {
+  "text": "rotate all the api keys and tokens across every service and update the env files",
+  "accept": [
+   "xhigh"
+  ],
+  "category": "risky",
+  "context": "idle"
+ },
+ {
+  "text": "migrate the db to the new server with zero downtime and a rollback plan",
+  "accept": [
+   "xhigh"
+  ],
+  "category": "risky",
+  "context": "idle"
+ },
+ {
+  "text": "audit every server's open ports and lock down anything that shouldnt be public",
+  "accept": [
+   "xhigh"
+  ],
+  "category": "risky",
+  "context": "idle"
+ },
+ {
+  "text": "rebuild the reverse proxy config from scratch on the prod box",
+  "accept": [
+   "xhigh"
+  ],
+  "category": "risky",
+  "context": "idle"
+ },
+ {
+  "text": "wipe and reinstall the media server os, backups first, then restore everything",
+  "accept": [
+   "xhigh"
+  ],
+  "category": "risky",
+  "context": "idle"
+ },
+ {
+  "text": "upgrade the database major version in prod, plan it out with rollback",
+  "accept": [
+   "xhigh"
+  ],
+  "category": "risky",
+  "context": "idle"
+ },
+ {
+  "text": "move all containers from the old host to the new host and cut dns over tonight",
+  "accept": [
+   "xhigh"
+  ],
+  "category": "risky",
+  "context": "idle"
+ },
+ {
+  "text": "rotate the ssh keys on every machine in the fleet without locking me out",
+  "accept": [
+   "xhigh"
+  ],
+  "category": "risky",
+  "context": "idle"
+ },
+ {
+  "text": "delete all the old backups and volumes we dont need anymore",
+  "accept": [
+   "xhigh"
+  ],
+  "category": "risky",
+  "context": "idle"
+ },
+ {
+  "text": "force push the cleaned history to main and update every clone",
+  "accept": [
+   "xhigh"
+  ],
+  "category": "risky",
+  "context": "idle"
+ },
+ {
+  "text": "restart the proxy on the prod box",
+  "accept": [
+   "high",
+   "xhigh"
+  ],
+  "category": "risky",
+  "context": "idle"
+ },
+ {
+  "text": "rewrite the firewall rules on the gateway to only allow the vpn",
+  "accept": [
+   "high",
+   "xhigh"
+  ],
+  "category": "risky",
+  "context": "idle"
+ },
+ {
+  "text": "give the bot write access to the production repos",
+  "accept": [
+   "high",
+   "xhigh"
+  ],
+  "category": "risky",
+  "context": "idle"
+ },
+ {
+  "text": "update the paas instance to the latest version",
+  "accept": [
+   "high",
+   "xhigh"
+  ],
+  "category": "risky",
+  "context": "idle"
+ },
+ {
+  "text": "change the dns provider for all the domains",
+  "accept": [
+   "high",
+   "xhigh"
+  ],
+  "category": "risky",
+  "context": "idle"
+ },
+ {
+  "text": "prune all unused docker volumes on the main server",
+  "accept": [
+   "high",
+   "xhigh"
+  ],
+  "category": "risky",
+  "context": "idle"
+ },
+ {
+  "text": "enable auto deploy from main to production",
+  "accept": [
+   "high",
+   "xhigh"
+  ],
+  "category": "risky",
+  "context": "idle"
+ },
+ {
+  "text": "expose jellyfin to the internet safely",
+  "accept": [
+   "high",
+   "xhigh"
+  ],
+  "category": "risky",
+  "context": "idle"
+ },
+ {
+  "text": "rotate the db password and update every app that uses it",
+  "accept": [
+   "high",
+   "xhigh"
+  ],
+  "category": "risky",
+  "context": "idle"
+ },
+ {
+  "text": "cleanup the leaked secret from the git history and rotate it",
+  "accept": [
+   "high",
+   "xhigh"
+  ],
+  "category": "risky",
+  "context": "idle"
+ },
+ {
+  "text": "continue",
+  "accept": [
+   "medium",
+   "high"
+  ],
+  "category": "followup_mid_task",
+  "context": "mid_task"
+ },
+ {
+  "text": "yes",
+  "accept": [
+   "medium",
+   "high"
+  ],
+  "category": "followup_mid_task",
+  "context": "mid_task"
+ },
+ {
+  "text": "do it",
+  "accept": [
+   "medium",
+   "high"
+  ],
+  "category": "followup_mid_task",
+  "context": "mid_task"
+ },
+ {
+  "text": "1.",
+  "accept": [
+   "medium",
+   "high"
+  ],
+  "category": "followup_mid_task",
+  "context": "mid_task"
+ },
+ {
+  "text": "try again",
+  "accept": [
+   "medium",
+   "high"
+  ],
+  "category": "followup_mid_task",
+  "context": "mid_task"
+ },
+ {
+  "text": "still broken",
+  "accept": [
+   "medium",
+   "high"
+  ],
+  "category": "followup_mid_task",
+  "context": "mid_task"
+ },
+ {
+  "text": "same thing on the other one",
+  "accept": [
+   "medium",
+   "high"
+  ],
+  "category": "followup_mid_task",
+  "context": "mid_task"
+ },
+ {
+  "text": "go ahead",
+  "accept": [
+   "medium",
+   "high"
+  ],
+  "category": "followup_mid_task",
+  "context": "mid_task"
+ },
+ {
+  "text": "ok now the second one",
+  "accept": [
+   "medium",
+   "high"
+  ],
+  "category": "followup_mid_task",
+  "context": "mid_task"
+ },
+ {
+  "text": "yep that one",
+  "accept": [
+   "medium",
+   "high"
+  ],
+  "category": "followup_mid_task",
+  "context": "mid_task"
+ },
+ {
+  "text": "no not that, the other config",
+  "accept": [
+   "medium",
+   "high"
+  ],
+  "category": "followup_mid_task",
+  "context": "mid_task"
+ },
+ {
+  "text": "what about the logs",
+  "accept": [
+   "medium",
+   "high"
+  ],
+  "category": "followup_mid_task",
+  "context": "mid_task"
+ },
+ {
+  "text": "and then?",
+  "accept": [
+   "medium",
+   "high"
+  ],
+  "category": "followup_mid_task",
+  "context": "mid_task"
+ },
+ {
+  "text": "run it",
+  "accept": [
+   "medium",
+   "high"
+  ],
+  "category": "followup_mid_task",
+  "context": "mid_task"
+ },
+ {
+  "text": "retry",
+  "accept": [
+   "medium",
+   "high"
+  ],
+  "category": "followup_mid_task",
+  "context": "mid_task"
+ },
+ {
+  "text": "that didnt work",
+  "accept": [
+   "medium",
+   "high"
+  ],
+  "category": "followup_mid_task",
+  "context": "mid_task"
+ },
+ {
+  "text": "check again",
+  "accept": [
+   "medium",
+   "high"
+  ],
+  "category": "followup_mid_task",
+  "context": "mid_task"
+ },
+ {
+  "text": "ok apply it",
+  "accept": [
+   "medium",
+   "high"
+  ],
+  "category": "followup_mid_task",
+  "context": "mid_task"
+ },
+ {
+  "text": "do the same for the rest",
+  "accept": [
+   "medium",
+   "high"
+  ],
+  "category": "followup_mid_task",
+  "context": "mid_task"
+ },
+ {
+  "text": "looks right, ship it",
+  "accept": [
+   "medium",
+   "high"
+  ],
+  "category": "followup_mid_task",
+  "context": "mid_task"
+ },
+ {
+  "text": "yeah",
+  "accept": [
+   "low",
+   "medium"
+  ],
+  "category": "followup_idle",
+  "context": "idle"
+ },
+ {
+  "text": "ok",
+  "accept": [
+   "low",
+   "medium"
+  ],
+  "category": "followup_idle",
+  "context": "idle"
+ },
+ {
+  "text": "sure do it",
+  "accept": [
+   "low",
+   "medium"
+  ],
+  "category": "followup_idle",
+  "context": "idle"
+ },
+ {
+  "text": "k continue",
+  "accept": [
+   "low",
+   "medium"
+  ],
+  "category": "followup_idle",
+  "context": "idle"
+ },
+ {
+  "text": "sure",
+  "accept": [
+   "low",
+   "medium"
+  ],
+  "category": "followup_idle",
+  "context": "idle"
+ },
+ {
+  "text": "yea go for it",
+  "accept": [
+   "low",
+   "medium"
+  ],
+  "category": "followup_idle",
+  "context": "idle"
+ },
+ {
+  "text": "1",
+  "accept": [
+   "low",
+   "medium"
+  ],
+  "category": "followup_idle",
+  "context": "idle"
+ },
+ {
+  "text": "yep",
+  "accept": [
+   "low",
+   "medium"
+  ],
+  "category": "followup_idle",
+  "context": "idle"
+ },
+ {
+  "text": "ok try again",
+  "accept": [
+   "low",
+   "medium"
+  ],
+  "category": "followup_idle",
+  "context": "idle"
+ },
+ {
+  "text": "same",
+  "accept": [
+   "low",
+   "medium"
+  ],
+  "category": "followup_idle",
+  "context": "idle"
+ },
+ {
+  "text": "compare plex vs jellyfin for my setup",
+  "accept": [
+   "medium"
+  ],
+  "category": "research",
+  "context": "idle"
+ },
+ {
+  "text": "whats your take on switching to a different reverse proxy",
+  "accept": [
+   "medium"
+  ],
+  "category": "research",
+  "context": "idle"
+ },
+ {
+  "text": "is it worth moving off docker compose to something bigger",
+  "accept": [
+   "medium"
+  ],
+  "category": "research",
+  "context": "idle"
+ },
+ {
+  "text": "opinion on using sqlite vs postgres for the bot state",
+  "accept": [
+   "medium"
+  ],
+  "category": "research",
+  "context": "idle"
+ },
+ {
+  "text": "whats the best way to do offsite backups for the nas",
+  "accept": [
+   "medium"
+  ],
+  "category": "research",
+  "context": "idle"
+ },
+ {
+  "text": "which is better for dns, a local resolver or just public ones",
+  "accept": [
+   "medium"
+  ],
+  "category": "research",
+  "context": "idle"
+ },
+ {
+  "text": "look into adding a vector db for the memory search",
+  "accept": [
+   "medium",
+   "high"
+  ],
+  "category": "research",
+  "context": "idle"
+ },
+ {
+  "text": "compare the options for a self hosted password manager",
+  "accept": [
+   "medium",
+   "high"
+  ],
+  "category": "research",
+  "context": "idle"
+ },
+ {
+  "text": "research whether i should go with a mini pc or a real server for the next node",
+  "accept": [
+   "medium",
+   "high"
+  ],
+  "category": "research",
+  "context": "idle"
+ },
+ {
+  "text": "is there a good self hosted alternative for the photo backup, compare a few",
+  "accept": [
+   "medium",
+   "high"
+  ],
+  "category": "research",
+  "context": "idle"
+ },
+ {
+  "text": "whats the tradeoff between running cron in hermes vs system cron for everything",
+  "accept": [
+   "medium",
+   "high"
+  ],
+  "category": "research",
+  "context": "idle"
+ },
+ {
+  "text": "look into adding sso in front of all my internal tools and give me options",
+  "accept": [
+   "medium",
+   "high"
+  ],
+  "category": "research",
+  "context": "idle"
+ },
+ {
+  "text": "what would it take to run a local llm on the small server, is it worth it",
+  "accept": [
+   "medium",
+   "high"
+  ],
+  "category": "research",
+  "context": "idle"
+ },
+ {
+  "text": "compare monitoring stacks for a small homelab",
+  "accept": [
+   "medium",
+   "high"
+  ],
+  "category": "research",
+  "context": "idle"
+ },
+ {
+  "text": "how should i structure secrets management across all my hosts, give me your take",
+  "accept": [
+   "medium",
+   "high"
+  ],
+  "category": "research",
+  "context": "idle"
+ }
+]
