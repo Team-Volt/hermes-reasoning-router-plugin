@@ -108,11 +108,9 @@ _MAX_PATTERNS = (
 # Explicit xhigh means: slow down; this is multi-system, risky, architectural,
 # security-sensitive, or asks for unusually complete execution.
 _XHIGH_PATTERNS = (
-    r"\b(xhigh|extra\s*high|think\s+hard(?:er)?)\b",
     r"\b(be\s+thorough|flesh\s+out|boil\s+the\s+ocean|do\s+the\s+whole\s+thing|end\s+to\s+end)\b",
-    r"\b(architecture|architectural|design\s+decision|tradeoff|strategy|migration\s+plan)\b",
-    r"\b(security|auth|oauth|credential|secret|permission|token|ssrf|injection)\b",
-    r"\b(?:production\s+(?:system|service|deploy|deployment|incident|outage)|prod\s+(?:deploy|deployment|incident|outage)|rollback\s+safety|rollback-safe|data\s+loss|incident|outage)\b",
+    r"\b(architecture|architectural|design\s+decision|tradeoff|migration\s+plan)\b",
+    r"\b(?:production\s+(?:system|service|deploy|deployment)|prod\s+(?:deploy|deployment)|rollback\s+safety|rollback-safe|data\s+loss)\b",
     r"\b(?:back\s*up|backup|rollback|restore)\b.{0,200}\b(?:all\s+of\s+them|all\s+(?:current\s+)?skills?|all\s+(?:files?|docs?|references?|pages?)|every|entire|whole|bulk)\b.{0,200}\b(?:remove|delete|scrub|purge|strip)\b",
     r"\b(?:all\s+of\s+them|all\s+(?:current\s+)?skills?|all\s+(?:files?|docs?|references?|pages?)|every|entire|whole|bulk|back\s*up|backup|rollback|restore)\b.{0,200}\b(?:remove|delete|scrub|purge|strip)\b.{0,120}\b(?:any|all|every)\s+(?:mention|mentions|reference|references|occurrence|occurrences)\b",
     r"\b(?:shut\s*down|shutdown|stop|disable|restart)\b.{0,120}\b(?:mcp|gateway|daemon|systemd|service|container|docker|postgres|redis|api|worker|server)\b",
@@ -124,6 +122,27 @@ _XHIGH_PATTERNS = (
     r"\b(?:update|switch|migrate)\b.{0,80}\b(?:ha|home\s*assistant|hacs)\b.{0,160}\b(?:new\s+)?fork\b",
     r"\b(?:copy|sync|migrate|import|backfill|mirror)\b.{0,180}\b(?:gbrain|hindsight)\b.{0,180}\b(?:gbrain|hindsight)\b",
     r"\b(?:gbrain|hindsight)\b.{0,180}\b(?:copy|sync|migrate|import|backfill|mirror)\b.{0,180}\b(?:gbrain|hindsight)\b",
+)
+
+# Nouns that only mean risk in a technical context ("secret santa", "security
+# deposit", "the incident at the zoo"). See _xhigh_keyword_route.
+_XHIGH_SECURITY_NOUN_RE = re.compile(r"\b(?:security|auth|oauth|credentials?|secrets?|permissions?|tokens?|ssrf|injection)\b", re.I)
+_XHIGH_EVENT_NOUN_RE = re.compile(
+    r"\b(?:production\s+(?:incident|outage)|prod\s+(?:incident|outage)|incident|outage|strategy)\b", re.I
+)
+_SECURITY_CHANGE_VERB_RE = re.compile(
+    r"\b(?:rotat\w*|revok\w*|reset|change|add|remove|delete|store|stor(?:e|ing)|leak(?:ed|ing)?|expos\w*|share|"
+    r"commit|push|move|migrat\w*|set\s*up|setup|configur\w*|implement|fix|updat\w*|grant|give|audit|harden|review|"
+    r"scope|enable|disable|lock|protect|encrypt|generate|create|replace|renew|handle|refresh|wire|hook|integrate)\b",
+    re.I,
+)
+_TECH_CONTEXT_RE = re.compile(
+    r"\b(?:api|app|apps|code|repo|server|login|sso|jwt|ssh|key|keys|env|config|plugin|bot|oauth|db|user|users|"
+    r"account|accounts|endpoint|cookie|session|scope|scopes|header|headers|webhook|cli|sdk|infra|cluster|backend|"
+    r"frontend|deploy|deployment|release|branch|pipeline|ci|prod|production|staging|service|services|network|"
+    r"firewall|vpn|cloud|aws|gcp|azure|github|docker|linux|mac|macos|windows|vault|1password|bitwarden|caching|cache|"
+    r"database|data|backup|backups|migration|rollout|testing|tests|postmortem|post-mortem|rca)\b",
+    re.I,
 )
 
 _DOCS_POLISH_PATTERNS = (
@@ -656,13 +675,23 @@ def reasoning_router_command(raw_args: str = "") -> str:
     )
 
 
+_CLASSIFY_HEAD_CHARS = 4000
+_CLASSIFY_TAIL_CHARS = 2000
+
+
 def classify_message(text: str, config: dict[str, Any] | None = None) -> tuple[str, str]:
     cfg = {**DEFAULT_CONFIG, **(config or {})}
-    normalized = " ".join(str(text or "").strip().split())
+    text = str(text or "")
+    # Only the ask matters for routing. A 50k-char paste is read as its opening
+    # plus its end, which keeps every pattern bounded in time.
+    if len(text) > _CLASSIFY_HEAD_CHARS + _CLASSIFY_TAIL_CHARS:
+        text = text[:_CLASSIFY_HEAD_CHARS] + "\n" + text[-_CLASSIFY_TAIL_CHARS:]
+    normalized = " ".join(text.strip().split())
     lowered = _normalize_for_match(normalized)
     # Keyword checks run on a masked copy so "tokens per second" or
-    # "permission denied" do not read as credential or access-control work.
-    risk_lowered = _risk_view(lowered)
+    # "permission denied" do not read as credential or access-control work,
+    # and "don't wipe the drive, just show smart status" is not a wipe.
+    risk_lowered = _risk_view(_strip_negated_clauses(lowered))
     effort, reason = _classify_core(text, normalized, lowered, risk_lowered, cfg)
     return effort, reason
 
@@ -676,6 +705,16 @@ def _classify_core(
 ) -> tuple[str, str]:
     if _EFFORT_WORD_RE.search(lowered) and not _is_simple_factual_question(lowered):
         return _clamp_effort("xhigh", cfg), "explicit request for extra-high reasoning"
+
+    # Thanks, venting and sarcasm can quote risky words without asking for
+    # anything: "thanks that migration went fine", "rotate all keys lol as if".
+    if _is_social_aside(lowered):
+        if _matches(_COMPILED_NONE, lowered):
+            return _clamp_effort("none", cfg), "matched no-op/simple time-date request"
+        return _clamp_effort("low", cfg), "thanks/aside with no new task"
+
+    if any(pattern.search(lowered) for pattern in _COMPILED_PERSONAL_QUICK):
+        return _clamp_effort("low", cfg), "personal quick action"
 
     if _matches(_COMPILED_XHIGH_EXTRA, risk_lowered) and not _is_simple_factual_question(lowered):
         if _is_pure_question(lowered) and not _is_imperative_request(lowered):
@@ -714,7 +753,8 @@ def _classify_legacy(
     # Question/clarification forms get one semantic pass so words like
     # "restart gateway" do not over-route when the user is only asking whether a
     # restart is needed.
-    if _matches(_COMPILED_XHIGH, risk_lowered):
+    xhigh_keywords = _matches(_COMPILED_XHIGH, risk_lowered) or _risk_noun_in_context(risk_lowered)
+    if xhigh_keywords:
         if _is_question_or_clarification(lowered):
             semantic_route = _semantic_route_for_ambiguous_message(
                 text,
@@ -726,6 +766,9 @@ def _classify_legacy(
             )
             if semantic_route is not None:
                 return semantic_route
+        if _is_pure_question(lowered) and not _is_imperative_request(lowered):
+            # Asking how something risky works is not doing it.
+            return _clamp_effort("high", cfg), "question about a risky or sensitive topic"
         return _clamp_effort("xhigh", cfg), "matched xhigh complexity/risk keywords"
 
     if _matches(_COMPILED_IMPLEMENTATION_APPROVAL, risk_lowered):
@@ -815,9 +858,6 @@ def _route_short_or_plain(normalized: str, lowered: str, cfg: dict[str, Any]) ->
     if _is_closer(lowered):
         return _clamp_effort("low", cfg), "quick/simple message"
 
-    if any(pattern.search(lowered) for pattern in _COMPILED_PERSONAL_QUICK):
-        return _clamp_effort("low", cfg), "personal quick action"
-
     troubleshooting = _matches(_COMPILED_TROUBLESHOOT, lowered)
     research = _matches(_COMPILED_RESEARCH, lowered)
     if troubleshooting and (research or _DESIGN_WORD_RE.search(lowered)):
@@ -836,9 +876,11 @@ def _route_short_or_plain(normalized: str, lowered: str, cfg: dict[str, Any]) ->
         floored = _floor_effort("low", "live_lookup_floor", cfg)
         if floored:
             return floored, "status lookup on a live system"
+    if _MULTI_GO_RE.search(lowered):
+        return _clamp_effort("high", cfg), "go-ahead for several steps"
+    if _BUILD_ARTIFACT_RE.search(_strip_request_prefix(lowered)) and not _is_pure_question(lowered):
+        return _clamp_effort("high", cfg), "request to write or build something new"
     if _is_imperative_request(lowered):
-        if _BUILD_ARTIFACT_RE.search(_strip_request_prefix(lowered)):
-            return _clamp_effort("high", cfg), "request to write or build something new"
         if _mentions_live_system(lowered, cfg) or len(normalized) > 40:
             return _clamp_effort("medium", cfg), "short request to change or build something"
     if _OPTION_PICK_RE.match(lowered):
@@ -1337,6 +1379,8 @@ def _is_simple_factual_question(lowered: str) -> bool:
     text = str(lowered or "").strip()
     if not text:
         return False
+    if re.match(r"^what\s+does\s+[\w .'/-]{1,40}\s+do[?!.\s]*$", text):
+        return True
     if re.match(r"^(?:what\s+does|what'?s|whats)\s+[\w .'-]{1,40}\s+(?:mean|stand\s+for)\b", text) or re.match(
         r"^define\s+\S", text
     ):
@@ -1365,12 +1409,12 @@ def _is_simple_factual_question(lowered: str) -> bool:
 # ---------------------------------------------------------------------------
 
 _REQUEST_PREFIX_RE = re.compile(
-    r"^(?:(?:ok(?:ay)?|k|so|and|also|now|then|alright|hey|yo|pls|please|plz|kindly|"
+    r"^(?:(?:can|could|would|will|may)\s+(?:you|u|we|ya)\b(?:\s+please)?[\s,]*"
+    r"|(?:ok(?:ay)?|k|so|and|also|now|then|alright|hey|yo|pls|please|plz|kindly|just|"
     r"can|could|would|will|may)\b[\s,]*"
-    r"|(?:can|could|would|will|may)\s+(?:you|u|we|ya)\b(?:\s+please)?[\s,]*"
     r"|(?:let'?s|lets|let\s+us)\b[\s,]*"
     r"|i\s+(?:want|need|would\s+like|'?d\s+like|wanna)\s+(?:you\s+|u\s+)?(?:to\s+)?"
-    r"|go\s+ahead\s+and\s+|time\s+to\s+|help\s+me\s+|try\s+to\s+)+",
+    r"|go\s+ahead\s+and\s+|time\s+to\s+|help\s+me\s+|try\s+to\s+|would\s+you\s+mind\s+)+",
     re.I,
 )
 
@@ -1384,7 +1428,9 @@ _IMPERATIVE_VERB_RE = re.compile(
     r"prune|purge|rotate|expose|lock\s+down|harden|optimi[sz]e|tune|speed\s+up|clone|fork|"
     r"release|publish|ship|wire|connect|mount|point|route|forward|allow|block|grant|revoke|"
     r"get\s+(?:the|a|an|me|us)|download|organi[sz]e|dedupe|backup|back\s+up|restore|"
-    r"schedule|test|retest|benchmark|debug|troubleshoot|investigate|diagnose|audit|review)\b",
+    r"schedule|test|retest|benchmark|debug|troubleshoot|investigate|diagnose|audit|review|code|plan|design|architect|"
+    r"walk\s+(?:me\s+)?through|guide\s+(?:me\s+)?through|regenerate|kill|sudo|chown|chmod|nuke|wipe|format|reset|"
+    r"decommission|drop|destroy|truncate|flush|open|put|swap)\b",
     re.I,
 )
 
@@ -1399,7 +1445,7 @@ _CLOSER_WORDS = frozenset(
     """thanks thank you so much ty thx tysm cheers lol haha hah heh lmao lmfao rofl nice cool
     sweet great perfect awesome amazing wow yay love it that worked works working got
     good all sounds appreciate appreciated legend beautiful brilliant excellent neat
-    man dude bro buddy nerd one oh ah ahh ahhh okay ok k yeah yep nice gg gn night goodnight
+    man dude bro buddy nerd one oh ah ahh ahhh okay ok k yeah yep nice gg gn night goodnight btw fyi
     morning gm hi hey hello sup yo hiii hii there you""".split()
 )
 _CLOSER_CORE_WORDS = frozenset(
@@ -1408,29 +1454,29 @@ _CLOSER_CORE_WORDS = frozenset(
     brilliant excellent neat gg gn night goodnight morning gm hi hey hello sup yo hiii hii""".split()
 )
 
-# Terse replies that continue whatever the session was doing.
-_CONTINUATION_RE = re.compile(
-    r"^(?:(?:and|ok(?:ay)?|k|yes|yeah|yep|now|so|alright|please|pls)[,\s]+)*"
-    r"(?:continue|keep\s+going|go\s+on|carry\s+on|proceed|resume|go\s+ahead|go\s+for\s+it|"
-    r"do\s+it(?:\s+all)?|do\s+(?:all|both|them|those)|yes|y|yep|yeah|yea|yup|sure|affirmative|"
-    r"try\s+(?:it\s+|that\s+)?again|retry|again|run\s+it(?:\s+again)?|retest|re-?run|next|"
-    r"and\s+then\??|then\s+what\??|ship\s+it|apply\s+it|push\s+it|finish\s+(?:it|up)|"
-    r"\d{1,2}[.)]?|option\s+\d+|all\s+of\s+(?:them|those|it)|both|all|"
-    r"same(?:\b.*)?|still\b.*|nope?\b.*\bstill\b.*|(?:that\s+)?(?:didn'?t|did\s+not|doesn'?t)\s+work.*|"
-    r"not\s+working.*|check\s+again|do\s+the\s+same\b.*|the\s+other\s+one.*|now\s+the\b.*|"
-    r"what\s+about\s+the\b.*|and\s+the\b.*)"
-    r"[.!?\s]*$",
-    re.I,
-)
-
 _TROUBLESHOOT_PATTERNS = (
-    r"\b(?:isn'?t|aren'?t|wasn'?t|not|never|won'?t|wont|can'?t|cant|cannot|doesn'?t|didn'?t|didnt|doesnt|isnt|arent)\s+"
+    r"\b(?:isn'?t|aren'?t|wasn'?t|not|never|won'?t|wont|can'?t|cant|cannot|doesn'?t|didn'?t|didnt|doesnt|isnt|arent|"
+    r"don'?t|dont|aint|ain'?t)\s+"
     r"(?:\w+\s+){0,2}(?:work|working|load|loading|respond|responding|show|showing|showin|online|up|playing|play|"
     r"import|importing|resolve|resolving|fire|firing|run|running|start|starting|connect|connecting|sync|syncing|"
     r"send|sending|go\s+off|reachable|picking\s+up|pick\s+up|turn\s+on|boot|booting|update|updating|save|saving|"
     r"open|opening|download|downloading|reply|replying|load)\b",
     r"\b(?:keeps?|kept)\s+(?:on\s+)?(?:restarting|crashing|buffering|climbing|failing|dropping|disconnecting|"
-    r"timing\s+out|freezing|hanging|looping|stuttering|rebooting|going\s+down|dying|erroring)\b",
+    r"timing\s+out|freezing|hanging|looping|stuttering|rebooting|going\s+down|dying|erroring|growing|increasing|rising|"
+    r"filling(?:\s+up)?|beeping|flapping)\b",
+    r"\b(?:is|are|went|goes|been|was|still|it'?s|its)\s+down\b|\bdown\s+again\b|\b(?:dead|dying|died|dies|flapping|flaky|"
+    r"acting\s+(?:up|weird|funny|strange)|blank|white\s+screen|beeps?|beeping|latency|spikes?|spiking|pinned|pegged|maxed\s+out|"
+    r"drops|dropping|expired|disappear(?:s|ing)?|wtf)\b",
+    r"\b(?:can'?t|cant|cannot|unable\s+to|couldn'?t|could\s+not)\s+(?:\w+\s+)?(?:ssh|reach|access|log\s*in|login|connect|"
+    r"ping|mount|see|find|get\s+(?:in|to|into))\b",
+    r"\bshows?\s+(?:no|0|zero|nothing)\b|\bno\s+data\b|\bsays\s+nothing\b|\b(?:it|now\s+it|this|that)\s+says\b|"
+    r"\bconnection\s+reset\b|\breset\s+by\s+peer\b|\btimes?\s+out\b|\b(?:cert|certificate|ssl|tls)\s+(?:warning|error)s?\b|"
+    r"\bpending\s+sectors?\b|\breallocated\b|\bat\s+(?:9\d|100)\s*%|\bsomething\s+(?:is\s+|'?s\s+)?(?:wrong|off)\b|"
+    r"\bsame\s+(?:issue|problem|error)\b|\bstill\s+(?:the\s+)?same\b|\bstill\s+(?:happening|broken|failing|not)\b|"
+    r"\bno\s+idea\s+why\b|\bgoing\s+on\s+with\b",
+    r"\b(?:works?|resolves?|loads?|connects?)\b.{0,50}\bbut\b.{0,50}\b(?:not|times?\s+out|fails?|doesn'?t|won'?t|can'?t)\b",
+    r"\bwhat'?s\s+(?:causing|eating|using|hogging|filling|killing)\b|\bwhats\s+(?:causing|eating|using|hogging|filling)\b|"
+    r"\b(?:what|who)\s+is\s+(?:causing|eating|using|hogging|filling|killing)\b",
     r"\b(?:offline|broken|broke|failing|failed|errors?|erroring|stuck|stalls?|stalled|stalling|hangs?|hanging|"
     r"frozen|freezing|crash(?:es|ed|ing)?|buffering|stutter(?:s|ing)?|laggy|lagging|slow|timed?\s*out|timeout|"
     r"disconnected|unreachable|unavailable|refused|denied|500|502|503|504|404|oom|leak(?:ing)?|corrupt(?:ed)?|"
@@ -1446,12 +1492,14 @@ _TROUBLESHOOT_PATTERNS = (
 _RESEARCH_PATTERNS = (
     r"\b(?:compare|comparison|comparing|vs\.?|versus|pros\s+and\s+cons|worth\s+it|is\s+it\s+worth|"
     r"worth\s+(?:switching|moving|upgrading|getting|buying|it)|which\s+(?:\w+\s+){0,2}(?:is|would\s+be)\s+better|"
-    r"what'?s\s+better|whats\s+better|what\s+is\s+better|best\s+(?:way|option|approach|practice|tool|setup)|"
+    r"what'?s\s+better|whats\s+better|what\s+is\s+better|best\s+(?:\w+\s+){0,2}(?:way|option|approach|practice|tools?|setup|"
+    r"apps?|nas|router|choice|pick|software|service|provider|distro|os|hardware|gpu|cpu|drive|drives|ssd)|"
+    r"(?:what\s+is|what'?s|whats)\s+the\s+best\b|is\s+(?:\w+\s+){0,4}enough\b|enough\s+for\b|is\s+it\s+ok(?:ay)?\s+to\b|"
     r"alternatives?\s+(?:to|for)|options?\s+for|look\s+into|looking\s+into|look\s+up|research|recommend(?:ation)?s?|"
     r"should\s+(?:i|we)\s+(?:use|go|switch|try|move|get|buy|pick|stick|keep|run|choose)|"
     r"difference\s+between|what\s+would\s+it\s+take|opinion|thoughts\s+on|your\s+take|summari[sz]e|"
     r"what\s+changed|how\s+does\b.{0,60}\bcompare|what\s+are\s+(?:people|folks|others)\s+using|"
-    r"is\s+it\s+safe|is\s+(?:it|that|this)\s+(?:a\s+good\s+idea|smart|better|faster|worth)|"
+    r"is\s+it\s+safe|how\s+do\s+(?:i|we)\s+(?:safely\s+)?(?:undo|revert|recover|restore|roll\s*back|migrate|move)\b|is\s+(?:it|that|this)\s+(?:a\s+good\s+idea|smart|better|faster|worth)|"
     r"read\s+(?:the|up\s+on)\b.{0,40}\b(?:docs?|documentation|changelog|release\s+notes)|"
     r"any\s+(?:good\s+)?(?:alternatives?|options?|recommendations?)|how\s+(?:can|could|should|would)\s+(?:we|i)\b|"
     r"what\s+(?:do|should|would)\s+(?:we|i|you)\s+(?:need|use|do|recommend|suggest))\b",
@@ -1469,7 +1517,7 @@ _LIVE_SYSTEM_TERMS = (
     "sabnzbd", "coolify", "tailscale", "wireguard", "home assistant", "homeassistant", "zigbee",
     "traefik", "caddy", "nginx", "kubernetes", "k8s", "portainer", "proxmox", "unraid", "truenas",
     "grafana", "prometheus", "uptime kuma", "pihole", "pi-hole", "adguard", "postgres", "mysql", "redis",
-    "hermes", "discord", "github", "gitlab", "cloudflare", "vercel",
+    "hermes", "discord", "github", "gitlab", "cloudflare", "vercel", "ssh",
 )
 
 _LIVE_LOOKUP_SHAPE_PATTERNS = (
@@ -1491,26 +1539,39 @@ _XHIGH_EXTRA_PATTERNS = (
     # fleet-wide changes
     r"\b(?:every|all(?:\s+(?:the|of\s+the|my|our))?|each)\s+(?:\w+\s+)?(?:server|servers|host|hosts|machine|machines|"
     r"node|nodes|box|boxes|service|services|container|containers|repo|repos|clone|clones|site|sites|vm|vms|device|"
-    r"devices|environment|environments)\b.{0,80}\b(?:rotate|reset|delete|remove|wipe|migrate|upgrade|update|restart|"
+    r"devices|environment|environments)\b.{0,80}\b(?:rotate|reset|delete|remove|wipe|migrate|upgrade|update|restart|reboot|"
     r"move|redeploy|prune|purge|rebuild|lock\s+down|replace|reinstall|cut|force|re-?key|patch)\b",
-    r"\b(?:rotate|reset|delete|remove|wipe|migrate|upgrade|restart|move|redeploy|prune|purge|rebuild|lock\s+down|"
-    r"replace|reinstall|re-?key|patch|update)\b.{0,100}\b(?:every|all|each|across)\s+(?:the\s+|of\s+the\s+|my\s+|our\s+)?"
+    r"\b(?:rotate|reset|delete|remove|wipe|migrate|upgrade|restart|reboot|shut\s*down|power\s+off|move|redeploy|prune|purge|"
+    r"rebuild|lock\s+down|replace|reinstall|re-?key|re-?image|patch|update)\b.{0,100}\b(?:every|all|each|across)\s+(?:the\s+|of\s+the\s+|my\s+|our\s+)?"
     r"(?:\w+\s+)?(?:fleet|servers?|hosts?|machines?|nodes?|box(?:es)?|services?|containers?|repos?|clones?|sites?|"
     r"vms?|devices?|environments?)\b",
-    r"\b(?:across\s+(?:the\s+)?(?:fleet|all|every)|fleet[-\s]?wide|on\s+all\s+(?:the\s+)?hosts)\b",
+    r"\b(?:across\s+(?:the\s+)?(?:fleet|all|every)|fleet[-\s]?wide|on\s+all\s+(?:the\s+)?hosts|(?:whole|entire)\s+fleet)\b",
     # credential rotation / access changes / exposure
-    r"\brotate\b.{0,60}\b(?:keys?|secrets?|tokens?|credentials?|passwords?|certs?|certificates?)\b",
+    r"\brotat(?:e|ing|ion)\b.{0,60}\b(?:keys?|secrets?|tokens?|credentials?|passwords?|certs?|certificates?)\b",
+    r"\b(?:reset|revoke|expire|invalidate)\b.{0,30}\b(?:all|every(?:one)?'?s?|each)\b.{0,30}\b(?:passwords?|tokens?|keys?|"
+    r"sessions?|credentials?)\b",
+    r"\bput\b.{0,30}\b(?:api\s+keys?|secrets?|tokens?|passwords?|credentials?|\.env)\b.{0,30}\b(?:repo|git|code|public|commit)\b",
+    r"\b(?:pentest|pen[-\s]?test|penetration\s+test|vulnerabilit(?:y|ies)|hacked|compromised|breach(?:ed)?|intrusion|"
+    r"malware|ransomware|rootkit)\b",
     r"\b(?:give|grant)\b.{0,60}\b(?:write|admin|root|sudo|owner)\s+(?:access|permissions?|rights)\b",
-    r"\b(?:expose|open\s+up|make\s+public)\b.{0,60}\b(?:internet|public|wan|outside|world)\b",
+    r"\b(?:expos\w*|open(?:ing)?(?:\s+up)?|make\s+public|put|publish|forward\w*|allow)\b.{0,60}\b(?:(?:open|public)\s+internet|"
+    r"the\s+internet|to\s+the\s+world|from\s+anywhere|publicly|wan|outside\s+world)\b",
+    r"\b0\.0\.0\.0/0\b|::/0|\bport[-\s]?forward\w*\b",
+    r"\bmake\s+(?:the\s+|my\s+|this\s+|our\s+)?(?:\w+\s+)?(?:public|world[-\s]readable)\b",
     # irreversible operations
     r"\b(?:wipe|reformat|re-?format|format\s+the|factory\s+reset|rm\s+-rf|force[-\s]?push|drop\s+(?:the\s+)?"
     r"(?:\w+\s+){0,2}(?:table|tables|database|db|schema)|truncate\s+(?:the\s+)?(?:\w+\s+)?table|rewrite\s+(?:the\s+)?"
     r"(?:git\s+)?history)\b",
     r"\b(?:delete|remove|purge|prune|wipe|nuke)\b.{0,40}\b(?:all|every|entire|whole)\b",
+    r"\bgit\s+push\b.{0,40}(?:\s-f\b|--force)|\b(?:terraform|tofu|pulumi)\s+destroy\b|\b(?:zfs|zpool)\s+destroy\b|"
+    r"\bmkfs(?:\.\w+)?\b|\bdd\s+if=|\bdocker\s+(?:system|volume|image)\s+prune\b|\bkubectl\s+delete\b|\bhelm\s+uninstall\b|"
+    r"\bdecommission\w*\b|\bchmod\s+(?:-r\s+)?777\b|\bch(?:own|mod)\s+-r\b|\bnuke\b|\bmove\s+(?:everything|all\s+of\s+it)\b.{0,60}\b(?:off|shut)\b",
+    r"\b(?:swap|point|switch|change|move|update|cut\s+over)\b.{0,40}\b(?:dns|domain|nameservers?|a\s+records?|mx\s+records?)\b",
     # production changes
-    r"\b(?:prod|production)\b.{0,60}\b(?:upgrade|migrate|migration|push|deploy|rebuild|delete|drop|restart|change|"
+    r"\b(?:prod|production)\b.{0,60}\b(?:upgrade|migrate|migration|push|deploy|ship|release|rebuild|delete|drop|restart|change|"
     r"update|write|access|reset|move)\b",
-    r"\b(?:upgrade|migrate|migration|push|deploy|rebuild|delete|drop|restart|change|update|reset|move)\b.{0,80}"
+    r"\b(?:upgrade|migrate|migration|push|deploy|ship|release|roll\s*out|rebuild|delete|drop|restart|change|update|reset|move|"
+    r"uninstall)\b.{0,80}"
     r"\b(?:prod|production)\b",
     # continuity demands
     r"\b(?:zero[-\s]?downtime|cut\s*over|cutover|without\s+(?:any\s+)?(?:downtime|data\s+loss|losing|locking)|"
@@ -1525,12 +1586,22 @@ _RISK_MASKS = (
     (re.compile(r"\b(?:command|button|script|endpoint|shortcut|way|option|toggle)\s+(?:to|that|for)\s+"
                 r"(?:restart|stop|shut\s*down|reboot)", re.I), "control action"),
     (re.compile(r"\b(?:my|our|the|this|your|current|whole|homelab|home)\s+setup\b", re.I), "the rig"),
+    (re.compile(r"\bsecret\s+(?:santa|life|garden|recipe|menu|ingredient|passage|level)s?\b"
+                r"|\bsecurity\s+(?:deposit|guard|blanket|question)s?\b|\bpermission\s+(?:from|slip)\b"
+                r"|\bend[-\s]to[-\s]end\s+encrypt\w*", re.I), "everyday phrase"),
+    (re.compile(r"\brm\s+-r?f?r?\s+(?:\./)?(?:node_modules|dist|build|target|out|\.next|\.cache|__pycache__|\.venv|venv|"
+                r"/tmp/\S*|tmp|\.pytest_cache|coverage)/?(?=\s|$)", re.I), "clean build output"),
 )
 
 _DESIGN_WORD_RE = re.compile(r"\b(?:architecture|architectural|design\s+decision|tradeoffs?|trade-offs?|strategy)\b", re.I)
-_EFFORT_WORD_RE = re.compile(r"\b(?:xhigh|extra\s*high|think\s+hard(?:er)?)\b", re.I)
+_EFFORT_WORD_RE = re.compile(
+    r"\bxhigh\b|\bthink\s+(?:really\s+)?hard(?:er)?\b"
+    r"|\b(?:use|using|with|at|on|go|try|need|want|in|switch\s+to)\s+(?:an?\s+)?extra[\s-]*high\b(?!\s+(?:setting|mode\s+on\s+my|speed|spin|heat))"
+    r"|\bextra[\s-]*high\s+(?:reasoning|effort|thinking)\b",
+    re.I,
+)
 _QUESTION_START_RE = re.compile(
-    r"^(?:what|what'?s|whats|why|how|which|when|where|who|is|are|was|were|does|do|did|should|would|could|"
+    r"^(?:explain|describe|what|what'?s|whats|why|how|which|when|where|who|is|are|was|were|does|do|did|should|would|could|"
     r"can\s+(?:i|it|this|that|they)|will\s+(?:it|this|that)|has|have|any|anything)\b",
     re.I,
 )
@@ -1559,6 +1630,75 @@ def _risk_view(lowered: str) -> str:
     return view
 
 
+_NEGATED_CLAUSE_RE = re.compile(
+    r"\b(?:(?:please\s+)?(?:don'?t|dont|do\s+not)|never|no\s+need\s+to|(?:i\s+am|i'?m|im)\s+not\s+asking\s+(?:you\s+|u\s+)?to|"
+    r"not\s+asking\s+(?:you\s+|u\s+)?to|without|skip(?:ping)?|won'?t\s+need\s+to)\s+(?:\w+\s+){0,2}?"
+    r"(?:wip(?:e|ing)|drop(?:ping)?|delet(?:e|ing)|remov(?:e|ing)|restart(?:ing)?|reboot(?:ing)?|expos(?:e|ing)|touch(?:ing)?|"
+    r"force[-\s]?push(?:ing)?|push(?:ing)?|rotat\w*|the\s+rotation|deploy(?:ing)?|chang(?:e|ing)|modify(?:ing)?|kill(?:ing)?|"
+    r"reset(?:ting)?|nuk(?:e|ing)|format(?:ting)?|anything)\b[^,;.!?]*",
+    re.I,
+)
+
+_SOCIAL_START_RE = re.compile(
+    r"^(?:thanks|thank\s+you|thx|ty|tysm|cheers|ha(?:ha)+|lol|lmao|lmfao|wow|oh\s+(?:great|nice|wow|man)|fyi|"
+    r"just\s+(?:wanna|want\s+to|gonna|need\s+to)\s+vent|just\s+venting|sure,)\b[\s,.!:-]*",
+    re.I,
+)
+_SOCIAL_END_RE = re.compile(
+    r"(?:\b(?:but|so)\s+nah|\bnah|\bas\s+if|\blove\s+that\s+for\s+me|\bthanks|\bthank\s+you|\bty|\blol|\blmao|"
+    r"\bha(?:ha)+)[\s.!?\U0001F300-\U0001FAFF]*$|\U0001F389\s*$",
+    re.I,
+)
+_SOCIAL_REQUEST_RE = re.compile(
+    r"\b(?:can\s+(?:you|u)|could\s+(?:you|u)|would\s+(?:you|u)|will\s+(?:you|u)|please|pls|plz|go\s+ahead|let'?s|lets|"
+    r"now\s+(?:do|can|go|run|let|try|fix|check|restart|deploy|push|add)|next\s+(?:do|step|up)|"
+    r"also\s+(?:do|can|please|run|fix|check|restart|add|update|deploy|push)|next\s*[:,-]|then\s+(?:can|do|please)|i\s+(?:need|want)\s+(?:you|u)|make\s+sure|do\s+it)\b",
+    re.I,
+)
+_MULTI_GO_RE = re.compile(
+    r"^(?:(?:ok(?:ay)?|yes|yeah|yep|sure|alright|great|perfect)[,.!\s]+)*(?:please\s+)?(?:do|run|apply|ship|go\s+with|implement)\s+"
+    r"(?:all|both|every(?:thing)?|each|them\s+all|all\s+(?:of\s+)?(?:it|them|those|three|four|five|the\s+(?:steps|fixes|changes)))\b"
+    r"|^(?:ok(?:ay)?[,\s]+)?do\s+\d+\b.{0,20}\bthen\s+\d+",
+    re.I,
+)
+
+
+def _strip_negated_clauses(lowered: str) -> str:
+    """Drop "don't wipe the drive" style clauses before risk matching."""
+    return _NEGATED_CLAUSE_RE.sub(" ", lowered)
+
+
+def _is_social_aside(lowered: str) -> bool:
+    """Thanks, venting, sarcasm or a status recap that asks for nothing new."""
+    text = lowered.strip()
+    if not text or len(text) > 300:
+        return False
+    start = _SOCIAL_START_RE.match(text)
+    if not start and not _SOCIAL_END_RE.search(text):
+        return False
+    if "?" in text or _SOCIAL_REQUEST_RE.search(text):
+        return False
+    if _matches(_COMPILED_TROUBLESHOOT, _strip_negated_clauses(text)) or _matches(_COMPILED_RESEARCH, text):
+        return False
+    core = _strip_request_prefix(text[start.end():] if start else text)
+    if _IMPERATIVE_VERB_RE.match(core):
+        return False
+    return True
+
+
+def _risk_noun_in_context(risk_lowered: str) -> bool:
+    """Security or incident nouns only count as risk next to a technical verb or object."""
+    if _XHIGH_SECURITY_NOUN_RE.search(risk_lowered):
+        if _SECURITY_CHANGE_VERB_RE.search(risk_lowered) or _TECH_CONTEXT_RE.search(risk_lowered):
+            return True
+    if _XHIGH_EVENT_NOUN_RE.search(risk_lowered):
+        if re.search(r"\b(?:prod|production)\s+(?:incident|outage)\b", risk_lowered):
+            return True
+        if _TECH_CONTEXT_RE.search(risk_lowered) or _mentions_live_system(risk_lowered, None):
+            return True
+    return False
+
+
 def _strip_request_prefix(lowered: str) -> str:
     return _REQUEST_PREFIX_RE.sub("", lowered, count=1).strip()
 
@@ -1584,10 +1724,13 @@ def _is_imperative_request(lowered: str) -> bool:
 
 
 _BUILD_ARTIFACT_RE = re.compile(
-    r"^(?:write|build|create|implement|automate|script|generate|make)\b.{0,40}\b(?:script|plist|launchd|cron|"
+    r"^(?:write|build|create|implement|automate|script|generate|make|code)\b.{0,40}\b(?:script|plist|launchd|cron|"
     r"job|bot|service|tool|app|page|site|dashboard|hook|webhook|plugin|skill|digest|workflow|pipeline|api|cli|"
-    r"integration|exporter|importer|parser|scraper|daemon|endpoint|test\s+suite|tests)\b"
-    r"|^script\s+to\b",
+    r"integration|exporter|importer|parser|scraper|daemon|endpoint|test\s+suite|tests|actions?|program|function|module|"
+    r"playbook|dockerfile|unit|alerts?|monitor)\b"
+    r"|^script\s+to\b"
+    r"|^(?:i\s+)?(?:need|want)\s+(?:a|an)\s+(?:\w+\s+){0,3}(?:script|tool|bot|app|cli|dashboard|service|automation|cron|"
+    r"plugin|workflow|action|program|monitor|alert)s?\b",
     re.I,
 )
 _OPTION_PICK_RE = re.compile(
@@ -1698,7 +1841,7 @@ def _is_explicit_config_snippet_request(text: str) -> bool:
 
     return bool(
         re.search(r"```(?:yaml|yml)?\s*\r?\n", raw, re.I)
-        or re.search(r"(?m)^\s*[-\w.\"']+\s*:\s*\S+", raw)
+        or re.search(r"(?m)^[ \t]*[-\w.\"']+[ \t]*:[ \t]*\S", raw)
     )
 
 
