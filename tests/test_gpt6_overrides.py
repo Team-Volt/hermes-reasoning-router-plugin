@@ -56,6 +56,14 @@ HARD = "Audit the production deploy pipeline for security regressions and root c
         ("claude-opus-5-5", "max", "max"),
         ("claude-sonnet-5-5", "minimal", "low"),
         ("gpt-6-sol", "none", "none"),
+        ("gpt-6-luna", "none", "none"),
+        ("gpt-6-astra", "max", "max"),
+        ("gpt-6.1-sol", "max", "max"),
+        ("gpt-6.1-sol", "xhigh", "xhigh"),
+        ("gpt-6.1-sol", "none", "low"),
+        ("gpt-6.1-sol", "minimal", "low"),
+        ("openai-codex/gpt-6.1-sol", "max", "max"),
+        ("GPT-6.1-Sol", "none", "low"),
         ("some-local-model", "max", "max"),
         ("", "max", "max"),
     ),
@@ -82,6 +90,34 @@ def test_sol_session_keeps_max():
     gw = StatefulGateway({"reasoning_router": {"enabled": True, "max": "max"}}, model="gpt-6-sol")
     plugin.pre_gateway_dispatch(event("Use maximum reasoning for this review."), gateway=gw)
     assert gw.calls == [(KEY, {"enabled": True, "effort": "max"})]
+
+
+def test_gpt61_sol_ladder_is_pinned_over_older_hermes(monkeypatch):
+    """An older Hermes resolver returns the legacy none..xhigh ladder for 6.1 Sol."""
+    import sys
+    import types
+
+    plugin = load_plugin()
+    fake = types.ModuleType("agent.reasoning_effort")
+    setattr(fake, "codex_supported_efforts", lambda _m: ("none", "low", "medium", "high", "xhigh"))
+    monkeypatch.setitem(sys.modules, "agent", types.ModuleType("agent"))
+    monkeypatch.setitem(sys.modules, "agent.reasoning_effort", fake)
+    assert plugin._supported_efforts_for_model("gpt-6.1-sol") == ("low", "medium", "high", "xhigh", "max")
+    assert plugin._supported_efforts_for_model("gpt-6-sol") == ("none", "low", "medium", "high", "xhigh")
+
+
+def test_gpt61_sol_session_keeps_max():
+    plugin = load_plugin()
+    gw = StatefulGateway({"reasoning_router": {"enabled": True, "max": "max"}}, model="gpt-6.1-sol")
+    plugin.pre_gateway_dispatch(event("Use maximum reasoning for this review."), gateway=gw)
+    assert gw.calls == [(KEY, {"enabled": True, "effort": "max"})]
+
+
+def test_gpt61_sol_session_never_disables_reasoning():
+    plugin = load_plugin()
+    gw = StatefulGateway({"reasoning_router": {"enabled": True}}, model="gpt-6.1-sol")
+    plugin.pre_gateway_dispatch(event("thanks!"), gateway=gw)
+    assert gw.calls == [(KEY, {"enabled": True, "effort": "low"})]
 
 
 def test_clamp_can_be_disabled():

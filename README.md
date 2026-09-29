@@ -59,9 +59,9 @@ If `semantic_classifier_enabled` is true, deterministic routing still runs first
 
 High-complexity categories are counted. If a message hits at least `xhigh_high_match_threshold` categories, it routes to `xhigh` even without an explicit “xhigh” phrase.
 
-### GPT-5.6 Sol, Terra, and Luna
+### GPT-6 Astra, Sol, Luna, Terra, and GPT-6.1 Sol
 
-The router is model-agnostic. Routes are clamped onto the session model's real effort ladder (`model_aware_clamp`, on by default): `gpt-6-sol`, `gpt-6-luna` and `gpt-5.6-*` accept `max`; `gpt-6-terra` stops at `xhigh`; `gpt-6-astra` has no `none`/`minimal` (floor `low`); older `gpt-5.x` stop at `xhigh`; Claude models accept `none` through `max`. When Hermes is importable its own `codex_supported_efforts` is used, so the ladders stay in lockstep. Codex may call its maximum orchestration tier **Ultra**, but `ultra` is not a valid `reasoning.effort` wire value; the router normalizes that label to `max` before setting Hermes' session override.
+The router is model-agnostic. Routes are clamped onto the session model's real effort ladder (`model_aware_clamp`, on by default): `gpt-6-sol`, `gpt-6-luna` and `gpt-5.6-*` accept `max`; `gpt-6-terra` stops at `xhigh`; `gpt-6-astra` and `gpt-6.1-sol` accept `low` through `max` with no `none`/`minimal` (a "no reasoning" route becomes `low`); older `gpt-5.x` stop at `xhigh`; Claude models accept `none` through `max`. When Hermes is importable its own `codex_supported_efforts` is used, so the ladders stay in lockstep. The one exception is `gpt-6.1-sol`: its ladder is pinned in the plugin because Hermes releases that predate it fall back to the legacy `none`..`xhigh` ladder, which would cap `max` and send an unsupported `none`. Codex may call its maximum orchestration tier **Ultra**, but `ultra` is not a valid `reasoning.effort` wire value; the router normalizes that label to `max` before setting Hermes' session override.
 
 The default router clamp remains `max: xhigh` for backward compatibility and predictable cost. Opt into the new tier with `/reasoning-router max max` (or `/reasoning-router max ultra`) only when the active provider/model supports it.
 
