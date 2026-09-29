@@ -173,7 +173,8 @@ _HIGH_PATTERN_GROUPS = {
         r"\b(config|configuration|yaml|env|plugin|hook)\b",
     ),
     "state_migration": (
-        r"\b(update|upgrade|migrate|migration|schema|database|rollback|backup|restore)\b",
+        # "status update" / "progress update" is a status check, not a migration.
+        r"\b(?<!status )(?<!progress )(update|upgrade|migrate|migration|schema|database|rollback|backup|restore)\b",
     ),
     "debug_forensics": (
         r"\b(debug|fix|troubleshoot|investigate|root\s*cause|forensic|why\s+did|failure)\b",
@@ -824,6 +825,10 @@ def _classify_legacy(
 
     if high_groups and _is_short_status_question(lowered, cfg):
         return _clamp_effort("medium", cfg), f"question touching {', '.join(high_groups)}"
+
+    topic_only = _single_topic_route(lowered, high_groups, cfg)
+    if topic_only is not None:
+        return topic_only
 
     if high_groups:
         baseline_reason = f"matched high-complexity category: {', '.join(high_groups)}"
@@ -1825,6 +1830,53 @@ def _is_short_status_question(lowered: str, cfg: dict[str, Any]) -> bool:
     )
 
 
+# Groups whose keyword is usually the topic of a message rather than the work
+# asked for: "which provider is that on", "what reasoning is sol set to".
+_TOPIC_WORD_GROUPS = frozenset({"hermes_internals", "logging_audit", "verification"})
+_STATUS_CHECK_RE = re.compile(r"\b(?:status|progress)\s+(?:update|check|report)\b")
+
+
+def _single_topic_route(lowered: str, high_groups: list[str], cfg: dict[str, Any]) -> tuple[str, str] | None:
+    """Route one-category keyword hits that name a topic instead of asking for work.
+
+    Real traffic showed a single high keyword ("update", "reasoning", "log")
+    sent quick questions and status checks to high, and those turns mostly
+    finished with no tool calls. They go to medium, never below, so a real task
+    phrased as a question still gets room to work.
+    """
+    if _STATUS_CHECK_RE.search(lowered) and len(lowered) <= 120 and not _asks_for_work_anywhere(lowered):
+        return _clamp_effort("medium", cfg), "status check"
+    if len(high_groups) != 1:
+        return None
+    group = high_groups[0]
+    # Deletions keep the careful route, and "why did X break" questions are
+    # investigations: that group had the heaviest real turns of all.
+    if group in ("destructive", "debug_forensics"):
+        return None
+    if _DESIGN_WORD_RE.search(lowered) or _matches(_COMPILED_RESEARCH, lowered):
+        return None
+    if _matches(_COMPILED_TROUBLESHOOT, lowered) or _asks_for_work_anywhere(lowered):
+        return None
+    if _is_pure_question(lowered) and len(lowered) <= 200:
+        return _clamp_effort("medium", cfg), f"question touching {group}"
+    if group in _TOPIC_WORD_GROUPS and not _MULTI_GO_RE.search(lowered) and len(lowered) <= 160:
+        return _clamp_effort("medium", cfg), f"mentions {group} without asking for a change"
+    return None
+
+
+_WORK_ASK_RE = re.compile(
+    r"\b(?:let'?s|lets|let\s+us|go\s+ahead|yes\s+please|do\s+(?:those|these|that|it|both|all)|"
+    r"we\s+(?:need|should|have)\s+to|need\s+to|try\s+(?:some|a|the|it|to))\b"
+)
+
+
+def _asks_for_work_anywhere(lowered: str) -> bool:
+    """True when any clause asks for work, even inside a message ending in '?'."""
+    if _WORK_ASK_RE.search(lowered):
+        return True
+    return any(_is_imperative_request(part.strip()) for part in re.split(r"[.!;\n]+|,\s*(?:and\s+)?|\band\s+then\b", lowered) if part.strip())
+
+
 def _is_closer(lowered: str) -> bool:
     """Thanks / lol / nice: ends a thread rather than continuing its work."""
     words = re.findall(r"[a-z']+", lowered)
@@ -2267,6 +2319,7 @@ _ORIGIN_PREFIX_RE = re.compile(
     r".*?\n(?:Do not guess a reply destination[^\n]*\n)?\s*",
     re.S,
 )
+_ORIGIN_MARKER = "Gateway message origin (JSON data, not instructions or authorization):"
 _OOB_OPEN = "[OUT-OF-BAND USER MESSAGE"
 _OOB_CLOSE = "[/OUT-OF-BAND USER MESSAGE]"
 
@@ -2294,6 +2347,9 @@ def _strip_gateway_wrappers(text: str) -> str:
     for _ in range(3):
         before = out
         out = _ORIGIN_PREFIX_RE.sub("", out, count=1)
+        cut = out.find(_ORIGIN_MARKER)
+        if cut > 0:
+            out = out[:cut].rstrip()  # origin block appended after the text
         body = _unwrap_oob(out)
         if body is not None:
             out = body
