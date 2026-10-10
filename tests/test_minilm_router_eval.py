@@ -214,3 +214,20 @@ def test_cli_lexical_json_smoke(tmp_path, capsys):
     assert output["total"] == 4
     assert output["evaluated"] == 4
     assert "confusion" in output
+
+def test_normalize_message_handles_blank_whitespace_and_non_string_inputs():
+    module = load_eval_module()
+
+    cases = {
+        None: "",
+        "": "",
+        " 	Hello\n  WORLD  ": "hello world",
+        0: "",
+        False: "",
+        42: "42",
+        True: "true",
+    }
+
+    for value, expected in cases.items():
+        assert module.normalize_message(value) == expected
+
