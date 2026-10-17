@@ -10,6 +10,7 @@ the real backend reasoning parameter rather than prompt-injecting advice.
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import logging
 import os
@@ -33,8 +34,23 @@ except Exception:  # pragma: no cover - Hermes normally depends on PyYAML
 
 logger = logging.getLogger(__name__)
 
-EFFORT_ORDER = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
-EFFORT_ALIASES = {"ultra": "max"}
+
+def _load_sibling(name: str):
+    path = Path(__file__).resolve().parent / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(f"reasoning_router_{name}", path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_effort = _load_sibling("effort")
+EFFORT_ORDER = _effort.EFFORT_ORDER
+EFFORT_ALIASES = _effort.EFFORT_ALIASES
+_normalize_effort_name = _effort._normalize_effort_name
+_fallback_clamp_effort = _effort._fallback_clamp_effort
+_reasoning_config_for_effort = _effort._reasoning_config_for_effort
 
 # Per-model wire ladders (mirrors hermes agent/reasoning_effort.py). Used only when
 # Hermes' own resolver is unavailable. GPT-6 Sol/Luna (and gpt-5.6) accept max;
@@ -51,7 +67,7 @@ _CODEX_LEGACY_EFFORTS = ("none", "low", "medium", "high", "xhigh")
 _CLAUDE_EFFORTS = ("none", "low", "medium", "high", "xhigh", "max")
 DEFAULT_CONFIG = {
     "enabled": True,
-    "default": "medium",
+    "default": _effort.DEFAULT_EFFORT,
     "min": "none",
     "max": "xhigh",
     "shadow_mode": False,
@@ -2348,11 +2364,6 @@ def _safe_float(value: Any, default: float) -> float:
         return default
 
 
-def _normalize_effort_name(value: Any) -> str:
-    effort = str(value or "").strip().lower()
-    return EFFORT_ALIASES.get(effort, effort)
-
-
 def _clamp_effort(effort: str, config: dict[str, Any]) -> str:
     effort = _normalize_effort_name(effort)
     if effort not in EFFORT_ORDER:
@@ -2372,15 +2383,6 @@ def _clamp_effort(effort: str, config: dict[str, Any]) -> str:
         min_idx, max_idx = max_idx, min_idx
     idx = max(min_idx, min(max_idx, idx))
     return EFFORT_ORDER[idx]
-
-
-def _reasoning_config_for_effort(effort: str) -> dict[str, Any]:
-    effort = _normalize_effort_name(effort)
-    if effort == "none":
-        return {"enabled": False}
-    if effort not in EFFORT_ORDER:
-        effort = DEFAULT_CONFIG["default"]
-    return {"enabled": True, "effort": effort}
 
 
 def _session_key_for(event, gateway, session_store=None) -> str:
@@ -2663,29 +2665,6 @@ def _supported_efforts_for_model(model: str) -> tuple[str, ...] | None:
     if bare.startswith("claude"):
         return _CLAUDE_EFFORTS
     return None
-
-
-def _fallback_clamp_effort(effort: str, supported) -> str:
-    """Faithful copy of Hermes' ``agent.reasoning_effort.clamp_effort`` (no overrides).
-
-    Nearest weaker supported level, else the weakest supported one. ``none``
-    disables reasoning, so it is never a clamp target for an enabled request:
-    ``minimal`` on a ladder without ``minimal`` becomes ``low``, not off.
-    """
-    requested = str(effort or "").strip().lower()
-    if not requested or not supported:
-        return effort
-    supported_norm = [lvl for lvl in (str(s).strip().lower() for s in supported) if lvl in EFFORT_ORDER]
-    if not supported_norm or requested in supported_norm:
-        return effort
-    if requested not in EFFORT_ORDER:
-        return effort
-    candidates = [level for level in supported_norm if level != "none"]
-    if not candidates:
-        return effort
-    requested_idx = EFFORT_ORDER.index(requested)
-    below = [level for level in candidates if EFFORT_ORDER.index(level) < requested_idx]
-    return max(below, key=EFFORT_ORDER.index) if below else min(candidates, key=EFFORT_ORDER.index)
 
 
 def _clamp_to_model(effort: str, model: str) -> str:
