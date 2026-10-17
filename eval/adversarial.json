@@ -588,5 +588,80 @@
   "text": "the extra high setting on my washer is broken lol",
   "accept": "none-high",
   "tag": "effort-word"
+ },
+ {
+  "text": "What does OAuth mean? Rotate the API keys",
+  "accept": "xhigh",
+  "tag": "review-16"
+ },
+ {
+  "text": "What does OAuth mean?",
+  "accept": "low",
+  "tag": "review-16"
+ },
+ {
+  "text": "what is the status of my server and then delete the old logs?",
+  "accept": "high",
+  "tag": "review-16"
+ },
+ {
+  "text": "what is the status of my server?",
+  "accept": "medium",
+  "tag": "review-16"
+ },
+ {
+  "text": "Do not restart the gateway but rotate the API keys",
+  "accept": "xhigh",
+  "tag": "review-16"
+ },
+ {
+  "text": "don't wipe the drive, just show smart status",
+  "accept": "medium",
+  "tag": "review-16"
+ },
+ {
+  "text": "The log says \"terraform destroy\"",
+  "accept": "medium",
+  "tag": "review-16"
+ },
+ {
+  "text": "Please run \"terraform destroy\" on staging",
+  "accept": "xhigh",
+  "tag": "review-16"
+ },
+ {
+  "text": "Please reset all user `passwords`",
+  "accept": "xhigh",
+  "tag": "review-16"
+ },
+ {
+  "text": "Please reset all user passwords",
+  "accept": "xhigh",
+  "tag": "review-16"
+ },
+ {
+  "text": "revoke all `tokens`",
+  "accept": "xhigh",
+  "tag": "review-16"
+ },
+ {
+  "text": "revoke all tokens",
+  "accept": "xhigh",
+  "tag": "review-16"
+ },
+ {
+  "text": "the log says `revoke all tokens` failed, what does that mean?",
+  "accept": "high",
+  "tag": "review-16"
+ },
+ {
+  "text": "Use maximum reasoning and think hard about this",
+  "accept": "xhigh",
+  "tag": "review-16"
+ },
+ {
+  "text": "think hard about this bug",
+  "accept": "xhigh",
+  "tag": "review-16"
  }
 ]

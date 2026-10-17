@@ -16,7 +16,7 @@ def _evaluate():
 def test_eval_sets_meet_published_accuracy(monkeypatch, tmp_path):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     results = _evaluate()
-    assert results["adversarial"]["total"] == 118
-    assert results["adversarial"]["passed"] == 118, results["adversarial"]["misses"]
+    assert results["adversarial"]["total"] == 133
+    assert results["adversarial"]["passed"] == 133, results["adversarial"]["misses"]
     assert results["tuning"]["total"] == 160 and results["tuning"]["passed"] >= 154, results["tuning"]["misses"]
     assert results["holdout"]["total"] == 150 and results["holdout"]["passed"] >= 143, results["holdout"]["misses"]
