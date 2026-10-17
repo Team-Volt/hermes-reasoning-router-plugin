@@ -408,13 +408,13 @@ python -m pytest -q tests -o 'addopts='
 
 ### Routing accuracy
 
-`eval/` holds three synthetic labeled sets: `tuning.json` (160 messages used while tuning the rules), `holdout.json` (150 messages kept out of tuning), and `adversarial.json` (118 misroutes found in an adversarial pass, each with an accepted effort range). They are paraphrased and contain no real chat text. To reproduce the numbers:
+`eval/` holds three synthetic labeled sets: `tuning.json` (160 messages used while tuning the rules), `holdout.json` (150 messages kept out of tuning), and `adversarial.json` (133 labeled messages, including the PR #16 review strings, each with an accepted effort range). They are paraphrased or constructed examples and contain no private chat text. To reproduce the numbers:
 
 ```bash
 python eval/evaluate.py          # add --show to print every miss
 ```
 
-The script loads the plugin with `eval/config.yaml` in a temporary `HERMES_HOME`, sends every labeled message through `pre_gateway_dispatch` on a fake gateway, and scores the adversarial set with `classify_message`. The semantic classifier stays off, so the results are deterministic. Current results: tuning 154/160 (96.2%), holdout 143/150 (95.3%), adversarial 118/118. `tests/test_eval_sets.py` fails if those numbers drop.
+The script loads the plugin with `eval/config.yaml` in a temporary `HERMES_HOME`, sends every labeled message through `pre_gateway_dispatch` on a fake gateway, and scores the adversarial set with `classify_message`. The semantic classifier stays off, so the results are deterministic. Current results: tuning 154/160 (96.2%), holdout 143/150 (95.3%), adversarial 133/133. `tests/test_eval_sets.py` fails if those numbers drop.
 
 ## LLM install prompt
 
