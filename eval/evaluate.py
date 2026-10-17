@@ -5,7 +5,7 @@ usage: python eval/evaluate.py [--show] [--config eval/config.yaml]
 Sets (all synthetic or paraphrased; no real chat text):
   eval/tuning.json       labeled messages used while tuning the rules
   eval/holdout.json      labeled messages held out from tuning
-  eval/adversarial.json  labeled edge cases (including PR #16 review strings), with the accepted range
+  eval/adversarial.json  labeled edge cases, with the accepted range
 
 Each labeled item is routed through ``pre_gateway_dispatch`` on a fresh fake
 gateway, so pending intents and session momentum behave as in Hermes. Items with

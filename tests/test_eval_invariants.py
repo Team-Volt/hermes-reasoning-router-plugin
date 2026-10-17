@@ -1,5 +1,3 @@
-"""#16 review strings live in eval/adversarial.json, not only in pytest."""
-
 import json
 from pathlib import Path
 
