@@ -1,7 +1,3 @@
-"""Sibling effort.py must load when tests exec_module __init__.py as a file."""
-
-from pathlib import Path
-
 from test_reasoning_router import PLUGIN_ROOT, load_plugin
 
 

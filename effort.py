@@ -1,10 +1,3 @@
-"""Effort names, aliases, and the only wire-override constructor.
-
-Loaded by path from ``__init__.py`` so tests that ``exec_module`` the plugin
-file still work. ``ultra`` is an alias for ``max`` and is never a wire value.
-``none`` is the only effort that becomes ``{enabled: False}``.
-"""
-
 from __future__ import annotations
 
 from typing import Any
@@ -29,12 +22,6 @@ def _reasoning_config_for_effort(effort: str) -> dict[str, Any]:
 
 
 def _fallback_clamp_effort(effort: str, supported) -> str:
-    """Faithful copy of Hermes' ``agent.reasoning_effort.clamp_effort`` (no overrides).
-
-    Nearest weaker supported level, else the weakest supported one. ``none``
-    disables reasoning, so it is never a clamp target for an enabled request:
-    ``minimal`` on a ladder without ``minimal`` becomes ``low``, not off.
-    """
     requested = str(effort or "").strip().lower()
     if not requested or not supported:
         return effort
