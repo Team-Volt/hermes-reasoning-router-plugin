@@ -4,6 +4,11 @@
 # Master switch. When false, messages pass through without changing reasoning.
 enabled: true
 
+# Opt-in ACP auto mode. Requires Hermes' select_turn_reasoning capability.
+# Only an explicitly session-pinned literal none is reinterpreted; other choices win.
+# Applies to every eligible ACP client in this profile, independently of enabled_platforms.
+acp_none_means_auto: false
+
 # Fallback when no deterministic rule or accepted semantic result strongly matches.
 # Valid efforts: none, minimal, low, medium, high, xhigh, max.
 # Codex's Ultra product label is accepted as an alias for max.

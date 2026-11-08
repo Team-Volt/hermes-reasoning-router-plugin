@@ -74,6 +74,7 @@ DEFAULT_CONFIG = {
     # Chat surfaces the router is allowed to affect. Unsupported platforms fail
     # open without mutating session reasoning.
     "enabled_platforms": ["discord", "telegram", "buzz"],
+    "acp_none_means_auto": False,
     # systemd/journald logging through the normal Hermes gateway logger
     "log_decisions": True,
     # persistent JSONL audit trail for later inspection or external audits
@@ -353,6 +354,12 @@ def _sweep_stale_state(config: dict[str, Any]) -> None:
 def register(ctx) -> None:
     ctx.register_hook("pre_gateway_dispatch", pre_gateway_dispatch)
     ctx.register_hook("post_llm_call", post_llm_call)
+    try:
+        from agent.turn_reasoning import TURN_REASONING_HOOK
+    except ImportError:
+        logger.info("reasoning-router: ACP automatic effort requires Hermes select_turn_reasoning")
+    else:
+        ctx.register_hook(TURN_REASONING_HOOK, select_turn_reasoning)
     ctx.register_command(
         "reasoning-router",
         reasoning_router_command,
@@ -536,6 +543,45 @@ def pre_gateway_dispatch(event=None, gateway=None, session_store=None, **_kwargs
 
     return None
 
+def _acp_state_key(profile_home: str, session_id: str) -> str:
+    return f"acp:{profile_home}:{session_id}"
+
+
+def select_turn_reasoning(*, platform=None, profile_home=None, session_id=None, turn_id=None,
+                          user_message=None, conversation_history=None, reasoning=None, model=None, **_kwargs):
+    """Opt-in ACP sentinel adapter; the host owns its lifetime and wire serialization."""
+    if platform != "acp" or not profile_home or not session_id or not turn_id:
+        return None
+    config = _read_router_config_from_disk()
+    if (_config_error() or config.get("acp_none_means_auto") is not True
+            or not _truthy(config.get("enabled", True))):
+        return None
+    if (not isinstance(reasoning, dict) or reasoning.get("source") != "session"
+            or reasoning.get("pinned") is not True or reasoning.get("raw_effort") != "none"):
+        return None
+    text = str(user_message or "")
+    if not text.strip() or _looks_like_slash_command(text):
+        return None
+    state_key = _acp_state_key(str(profile_home), str(session_id))
+    _sweep_stale_state(config)
+    effort, reason, pending = _effective_effort_for_message(
+        text, config, session_id=state_key, recent_messages=conversation_history or [])
+    if _truthy(config.get("model_aware_clamp", True)):
+        effort = _clamp_to_model(effort, str(model or ""))
+    shadow = _truthy(config.get("shadow_mode", False))
+    metadata = _route_metadata_for_decision(effort, reason, text, config, pending_intent=pending)
+    decision = {"timestamp": datetime.now(timezone.utc).isoformat(), "platform": "acp",
+                "session_key": state_key, "turn_id": turn_id, "effort": effort, "reason": reason,
+                "message_preview": _preview(text), "shadow_mode": shadow, "override_applied": not shadow,
+                **metadata}
+    _record_health("route", status="shadow" if shadow else "ok", session_key=state_key,
+                   effort=effort, reason=reason, shadow_mode=shadow)
+    if _truthy(config.get("decision_log", False)):
+        _append_decision_log(config, decision)
+    if _truthy(config.get("log_decisions", True)):
+        logger.info("reasoning-router: ACP session=%s effort=%s reason=%s", state_key, effort, reason)
+    return None if shadow else effort
+
 
 def post_llm_call(
     session_id: str | None = None,
@@ -560,6 +606,10 @@ def post_llm_call(
     if _config_error() or not _truthy(config.get("enabled", True)):
         return None
 
+    if platform == "acp":
+        if config.get("acp_none_means_auto") is not True:
+            return None
+        sid = _acp_state_key(str(_hermes_home()), sid)
     _sweep_stale_state(config)
     try:
         _record_momentum(sid, conversation_history, config)
@@ -1189,11 +1239,13 @@ def _effective_effort_for_message(
     *,
     session_store=None,
     session_key: str = "",
+    session_id: str | None = None,
+    recent_messages=None,
 ) -> tuple[str, str, dict[str, Any] | None]:
-    session_id = _session_id_for_key(session_store, session_key)
+    session_id = session_id if session_id is not None else _session_id_for_key(session_store, session_key)
     route_config = dict(config)
     if session_id:
-        recent_messages = _recent_messages_for_session(session_id)
+        recent_messages = recent_messages if recent_messages is not None else _recent_messages_for_session(session_id)
         if recent_messages:
             route_config["recent_messages"] = recent_messages
             last_assistant = next(
@@ -1203,21 +1255,20 @@ def _effective_effort_for_message(
             if last_assistant and not route_config.get("last_assistant_intent"):
                 route_config["last_assistant_intent"] = last_assistant[:500]
 
+    pending = (_active_pending_intent(session_id, config) if session_id
+               and _truthy(config.get("pending_intent_enabled", True)) else None)
+    if pending:
+        # Claim before a bounded classifier can outlive this turn; late returns cannot consume the next intent.
+        _consume_pending_intent(session_id)
     effort, reason = classify_message(text, route_config)
     effort, reason = _apply_momentum(text, effort, reason, session_id, config)
-    if not _truthy(config.get("pending_intent_enabled", True)):
-        return effort, reason, None
-
-    pending = _active_pending_intent(session_id, config) if session_id else None
     if not pending:
         return effort, reason, None
 
     if _is_rejection(text):
-        _consume_pending_intent(session_id)
         return effort, f"rejected pending task; {reason}", pending
 
     if _is_affirmative(text):
-        _consume_pending_intent(session_id)
         inherited = str(pending.get("effort") or "high")
         routed = _max_effort((effort, inherited), config)
         pending_reason = str(pending.get("reason") or "pending task")
@@ -1226,7 +1277,6 @@ def _effective_effort_for_message(
     # Pending intents are one-shot. Any non-empty user turn that is not the
     # affirmative consumes the pending task so a later bare "yes" cannot inherit
     # stale context.
-    _consume_pending_intent(session_id)
     return effort, f"cleared pending task; {reason}", pending
 
 
@@ -2183,6 +2233,8 @@ def _read_router_config_from_disk(*, include_runtime_override: bool = True) -> d
     cfg = {**DEFAULT_CONFIG, **router}
     if include_runtime_override and isinstance(_RUNTIME_CONFIG_OVERRIDE, dict):
         cfg.update(_RUNTIME_CONFIG_OVERRIDE)
+    if type(cfg.get("acp_none_means_auto")) is not bool:
+        _set_config_error("acp_none_means_auto must be a YAML boolean")
     return cfg
 
 

@@ -1,10 +1,37 @@
 # reasoning-router
 
-`reasoning-router` is a Hermes gateway plugin that automatically chooses the reasoning effort for each incoming Discord, Telegram, or Buzz gateway message.
+`reasoning-router` is a Hermes gateway plugin that automatically chooses the reasoning effort for each incoming Discord, Telegram, or Buzz gateway message, with optional ACP auto reasoning.
 
 It is useful when one chat contains both tiny messages (`thanks`, `what time is it?`) and deeper work (`debug this gateway issue`, `patch the plugin and verify it`). Instead of running every turn at the same reasoning level, the plugin classifies the incoming request and sets Hermes' real per-session reasoning override before the model request is made.
 
 > Current chat-surface support: **Discord, Telegram, and Buzz gateway messages**. All three use Hermes' normalized `MessageEvent` / `SessionSource` path. Tests cover Discord/Telegram topic or thread keys, Buzz's no-thread key shape, platform gating, and decision records. Cron jobs and non-gateway surfaces do not use this router.
+
+### Optional ACP auto reasoning
+
+Set `acp_none_means_auto: true` in this profile's standalone router config to reinterpret an
+**explicitly session-pinned literal `none`** from an ACP reasoning picker as auto. This applies
+to every eligible ACP client in that Hermes profile; client identity is not used. Inherited
+`none`, YAML `false`, `disabled`, reset/default choices and normalized disabled dictionaries do
+not opt in. Other manual efforts and per-request reasoning choices keep their normal priority.
+
+This requires Hermes' published `agent.turn_reasoning.TURN_REASONING_HOOK` capability
+(`select_turn_reasoning`), introduced by the companion **per-turn reasoning selection** upstream
+PR. That upstream change must land before releasing ACP support; there is no released minimum
+version assigned yet. Registration feature-detects the capability: older Hermes versions keep
+existing messaging routing and leave ACP unchanged.
+
+ACP uses an ephemeral native request configuration for the whole tool loop, retries and
+fallbacks. The picker stays on `none`; a selected `high` is never fed back as a manual pin.
+Fallbacks are clamped again by Hermes for their actual model, and native rejection recovery and
+deliberate continuation disable still apply. Changing effort can affect a provider's prompt
+cache even though the plugin does not rewrite past messages, tools or system prompts.
+
+The option defaults to `false` and requires a YAML boolean; invalid values fail safe. It is
+independent of `enabled_platforms`, which continues to govern Discord, Telegram and Buzz.
+`enabled: false`, shadow mode and failures leave ACP on its native baseline. Classification
+reuses the messaging intent, momentum and clamp logic, with state keyed by profile and session.
+The optional semantic classifier remains disabled by default. No installation or live
+configuration change is performed by this repository change.
 
 ## What it does
 
@@ -29,7 +56,8 @@ It is useful when one chat contains both tiny messages (`thanks`, `what time is 
 
 ## How it works
 
-The plugin registers two Hermes hooks:
+The plugin registers the two messaging hooks below and, when supported, `select_turn_reasoning`
+for the optional ACP mode:
 
 - `pre_gateway_dispatch`
   - Runs before Hermes dispatches the incoming gateway message to the agent.
@@ -128,6 +156,7 @@ Example config with every supported persistent option:
 
 ```yaml
 enabled: true
+acp_none_means_auto: false
 default: medium
 min: none
 max: xhigh
@@ -167,6 +196,7 @@ Config fields:
 | Field | Default | Meaning |
 |---|---:|---|
 | `enabled` | `true` | Turns the router on or off. When off, messages pass through without changing reasoning. |
+| `acp_none_means_auto` | `false` | YAML boolean opt-in for all ACP clients in this profile. Requires the companion Hermes hook and an original session-pinned literal `none`; preserves the picker and other manual/request choices. |
 | `default` | `medium` | Fallback effort when no deterministic rule or accepted semantic result strongly matches. Valid efforts: `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`; `ultra` is accepted as an alias for `max`. |
 | `min` | `none` | Minimum allowed effort after routing. Invalid values are ignored. |
 | `max` | `xhigh` | Maximum allowed effort after routing. Invalid values are ignored. If `min` is higher than `max`, the plugin swaps the clamp bounds. |
